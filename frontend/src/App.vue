@@ -1,19 +1,29 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api, { setUnauthorizedHandler } from './api'
-import { store, useStore, applyTheme, toggleTheme } from './store'
+import { store, applyTheme, toggleTheme, dismissToast, toastWarn } from './store'
 import { useLive } from './composables/useLive'
-import { fmtUptime } from './utils/format'
+import { visibleModules, flatPages } from './nav'
+import AppSidebar from './layout/AppSidebar.vue'
+import AppTopbar from './layout/AppTopbar.vue'
+import CommandPalette from './layout/CommandPalette.vue'
+import Modal from './components/Modal.vue'
+import ChangePassword from './components/ChangePassword.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { dismissToast, toastWarn } = useStore()
 
 const booting = ref(true)
-const navOpen = ref(false)
+const collapsed = ref(store.sidebarCollapsed)
+const mobileOpen = ref(false)
+const paletteOpen = ref(false)
+const pwOpen = ref(false)
+const unreadPorts = ref(0)
+const unreadEvents = ref(0)
+const notifEvents = ref([])
 const monitorActive = ref(false)
-const unreadCount = ref(0)
+
 const live = useLive((ev) => {
   if (ev.type === 'changed') {
     refreshBadges()
@@ -25,20 +35,46 @@ const live = useLive((ev) => {
   }
 })
 
-const groups = computed(() => {
-  const map = new Map()
-  for (const r of router.getRoutes()) {
-    if (!r.meta || !r.meta.group || !r.name) continue
-    if (r.meta.admin && store.identity.authenticated && store.identity.role !== 'admin') continue
-    if (!map.has(r.meta.group)) map.set(r.meta.group, [])
-    map.get(r.meta.group).push(r)
-  }
-  return [...map.entries()].map(([name, items]) => ({ name, items }))
+const admin = computed(() => store.identity.role === 'admin' || !store.identity.authenticated)
+const navModules = computed(() => visibleModules(admin.value))
+const pages = computed(() => flatPages(admin.value))
+const isLogin = computed(() => route.name === 'login')
+const pageTitle = computed(() => route.meta.title || 'NatPilot')
+const pageModule = computed(() => route.meta.group || '')
+
+const badges = computed(() => {
+  const out = {}
+  if (unreadPorts.value > 0) out.ports = unreadPorts.value
+  if (unreadEvents.value > 0) out.events = unreadEvents.value
+  return out
 })
 
-const pageTitle = computed(() => route.meta.title || 'NatPilot')
-const pageGroup = computed(() => route.meta.group || '')
-const isLogin = computed(() => route.name === 'login')
+function toggleSidebar() {
+  if (window.innerWidth <= 860) {
+    mobileOpen.value = !mobileOpen.value
+    return
+  }
+  collapsed.value = !collapsed.value
+  store.sidebarCollapsed = collapsed.value
+  localStorage.setItem('natpilot-sidebar', collapsed.value ? '1' : '0')
+}
+
+function onPick(page) {
+  router.push({ name: page.name })
+}
+
+function onKey(e) {
+  const key = (e.key || '').toLowerCase()
+  if ((e.ctrlKey || e.metaKey) && key === 'k') {
+    e.preventDefault()
+    paletteOpen.value = !paletteOpen.value
+    return
+  }
+  if (key === 'escape') {
+    paletteOpen.value = false
+    mobileOpen.value = false
+  }
+}
 
 async function boot() {
   applyTheme(store.theme)
@@ -56,7 +92,8 @@ async function boot() {
       store.identity = { authenticated: false, username: '', name: '', role: 'viewer' }
       if (route.name !== 'login') router.replace({ name: 'login' })
     } else {
-      store.identity = me.identity || { authenticated: false, username: 'local', name: '本地操作员', role: 'admin' }
+      store.identity =
+        me.identity || { authenticated: false, username: 'local', name: '本地操作员', role: 'admin' }
     }
     store.ready = true
   } catch (err) {
@@ -71,36 +108,26 @@ async function refreshBadges() {
   try {
     const [ports, events, monitor] = await Promise.all([
       api.ports({ status: 'not_added,open', limit: 1 }),
-      api.events({ limit: 1 }),
+      api.events({ limit: 8 }),
       api.monitor(),
     ])
-    unreadCount.value = (ports.total || 0) + (events.unread || 0)
+    unreadPorts.value = ports.total || 0
+    notifEvents.value = events.events || []
+    unreadEvents.value = events.unread || 0
     monitorActive.value = !!(monitor.monitor && monitor.monitor.active)
   } catch {
-    /* badges are best-effort */
+    /* badges and notifications are best-effort */
   }
 }
 
-watch(
-  () => route.fullPath,
-  () => {
-    navOpen.value = false
-    refreshBadges()
-  },
-)
-
-onMounted(async () => {
-  await boot()
-  refreshBadges()
-  if (!isLogin.value) {
-    try {
-      const monitor = await api.monitor()
-      monitorActive.value = !!(monitor.monitor && monitor.monitor.active)
-    } catch {
-      /* ignore */
-    }
+async function markAllRead() {
+  try {
+    await api.markEventsRead([])
+  } catch {
+    /* ignore */
   }
-})
+  refreshBadges()
+}
 
 async function doLogout() {
   try {
@@ -112,8 +139,32 @@ async function doLogout() {
   router.replace({ name: 'login' })
 }
 
+watch(
+  () => route.fullPath,
+  () => {
+    mobileOpen.value = false
+    paletteOpen.value = false
+    refreshBadges()
+  },
+)
+
+watch(
+  () => route.meta.title,
+  (t) => {
+    document.title = t ? `NatPilot · ${t}` : 'NatPilot'
+  },
+  { immediate: true },
+)
+
+onMounted(async () => {
+  window.addEventListener('keydown', onKey)
+  await boot()
+  refreshBadges()
+})
+
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+
 defineExpose({ refreshBadges })
-void fmtUptime
 </script>
 
 <template>
@@ -126,79 +177,48 @@ void fmtUptime
 
   <router-view v-else-if="isLogin" />
 
-  <div v-else class="shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="logo">NP</div>
-        <div>
-          <div class="title">NatPilot</div>
-          <div class="sub">NAT Console</div>
-        </div>
-      </div>
-      <nav class="nav">
-        <template v-for="group in groups" :key="group.name">
-          <div class="nav-group">
-            <div class="nav-group-label">{{ group.name }}</div>
-            <router-link
-              v-for="item in group.items"
-              :key="item.name"
-              :to="{ name: item.name }"
-              class="nav-item"
-              :class="{ active: route.name === item.name }"
-            >
-              <span class="ico">{{ item.meta.icon }}</span>
-              <span>{{ item.meta.title }}</span>
-              <span
-                v-if="item.name === 'ports' && unreadCount > 0"
-                class="badge accent"
-                >{{ unreadCount }}</span
-              >
-            </router-link>
-          </div>
-        </template>
-      </nav>
-      <div class="sidebar-foot">
-        <div class="row" style="justify-content: space-between">
-          <span>{{ store.meta.mode || 'auto' }} 模式</span>
-          <a href="#" @click.prevent="toggleTheme()">{{ store.theme === 'dark' ? '☾' : '☀' }}</a>
-        </div>
-        <div class="small" style="margin-top: 6px">
-          v{{ store.meta.version || '0.1.0' }} ·
-          <span :style="{ color: live.connected.value ? 'var(--ok)' : 'var(--danger)' }">
-            {{ live.connected.value ? '实时已连接' : '实时断开' }}
-          </span>
-        </div>
-      </div>
-    </aside>
+  <div v-else class="app-shell" :class="{ 'is-collapsed': collapsed, 'mobile-open': mobileOpen }">
+    <AppSidebar
+      :modules="navModules"
+      :collapsed="collapsed"
+      :version="store.meta.version"
+      :mode="store.meta.mode"
+      :live="live.connected.value"
+      :badges="badges"
+    />
 
-    <div class="main">
-      <header class="topbar">
-        <div>
-          <div class="crumb">{{ pageGroup }}</div>
-          <h1>{{ pageTitle }}</h1>
-        </div>
-        <div class="spacer" />
-        <span
-          v-if="monitorActive"
-          class="badge ok dot"
-          title="自动监控正在运行"
-          >自动监控中</span
-        >
-        <span v-if="store.meta.auth_enabled" class="badge" :class="store.identity.authenticated ? 'accent' : 'warn'">
-          {{ store.identity.authenticated ? store.identity.username : '未登录' }}
-        </span>
-        <span v-else class="badge">免登录</span>
-        <button v-if="store.meta.auth_enabled && store.identity.authenticated" class="btn ghost sm" @click="doLogout">
-          退出
-        </button>
-      </header>
-      <main class="content">
-        <router-view v-slot="{ Component }">
-          <component :is="Component" :key="route.fullPath" />
-        </router-view>
-      </main>
-    </div>
+    <AppTopbar
+      :title="pageTitle"
+      :module="pageModule"
+      :collapsed="collapsed"
+      :unread="unreadEvents"
+      :events="notifEvents"
+      :monitor-active="monitorActive"
+      :live="live.connected.value"
+      :theme="store.theme"
+      :auth-enabled="!!store.meta.auth_enabled"
+      :identity="store.identity"
+      @toggle-sidebar="toggleSidebar"
+      @open-search="paletteOpen = true"
+      @toggle-theme="toggleTheme()"
+      @mark-read="markAllRead"
+      @goto-events="router.push({ name: 'events' })"
+      @change-password="pwOpen = true"
+      @logout="doLogout"
+    />
+
+    <main class="app-content">
+      <router-view v-slot="{ Component }">
+        <component :is="Component" :key="route.fullPath" />
+      </router-view>
+    </main>
   </div>
+
+  <CommandPalette :open="paletteOpen" :pages="pages" @close="paletteOpen = false" @pick="onPick" />
+
+  <Modal v-if="pwOpen" title="修改密码" @close="pwOpen = false">
+    <ChangePassword />
+  </Modal>
 
   <div class="toasts">
     <div v-for="t in store.toasts" :key="t.id" class="toast" :class="t.kind" @click="dismissToast(t.id)">
