@@ -189,9 +189,14 @@ func (s *Store) MarkPortIgnored(id int64) error {
 	return err
 }
 
-// MarkPortRemoved clears the added link after a rule was deleted.
+// MarkPortRemoved clears the added link after a rule was deleted or disabled.
+//
+// The port returns to "not added" rather than "open": an open port was merely
+// discovered and never handled, while this one was deliberately managed and now
+// needs a decision again. Keeping those states apart is what lets the port list
+// be trusted after a rule is removed.
 func (s *Store) MarkPortRemoved(id int64) error {
-	_, err := s.db.Exec(`UPDATE ports SET added=0, rule_id=0, status=? WHERE id=?`, model.StatusOpen, id)
+	_, err := s.db.Exec(`UPDATE ports SET added=0, rule_id=0, status=? WHERE id=?`, model.StatusNotAdded, id)
 	return err
 }
 

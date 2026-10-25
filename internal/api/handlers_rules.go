@@ -297,6 +297,9 @@ func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 			summary["apply_error"] = aerr.Error()
 		}
 	}
+	// The target may have changed: drop links that point at a host/port this rule
+	// no longer manages, then link the port it manages now.
+	s.unlinkStalePortsForRule(rule)
 	s.linkPortToRule(rule)
 	fresh, _ := s.app.Store.GetRule(id)
 	views := s.enrichRules([]model.Rule{*fresh}, true)
@@ -437,6 +440,9 @@ func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// unlinkPortsFromRule releases every port that was managed by this rule, so the
+// port list goes back to "not added" instead of claiming a rule that no longer
+// exists (or is disabled).
 func (s *Server) unlinkPortsFromRule(ruleID int64) {
 	ports, _, err := s.app.Store.ListPorts(store.PortStatusFilter{Limit: 5000})
 	if err != nil {
@@ -446,6 +452,25 @@ func (s *Server) unlinkPortsFromRule(ruleID int64) {
 		if p.RuleID == ruleID {
 			_ = s.app.Store.MarkPortRemoved(p.ID)
 		}
+	}
+}
+
+// unlinkStalePortsForRule clears links whose observed host/port no longer match
+// the rule after an edit. Without it a rule repointed from 8080 to 9090 would
+// leave 8080 permanently marked as "added".
+func (s *Server) unlinkStalePortsForRule(rule *model.Rule) {
+	ports, _, err := s.app.Store.ListPorts(store.PortStatusFilter{Limit: 5000})
+	if err != nil {
+		return
+	}
+	for _, p := range ports {
+		if p.RuleID != rule.ID {
+			continue
+		}
+		if p.Host == rule.Host && p.Port == rule.Port && strings.EqualFold(p.Protocol, rule.Protocol) {
+			continue
+		}
+		_ = s.app.Store.MarkPortRemoved(p.ID)
 	}
 }
 
@@ -474,6 +499,13 @@ func (s *Server) handleToggleRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum, aerr := s.app.Mapper.ApplyRule(r.Context(), *rule)
+	// Keep the port list in step with the switch: a disabled rule no longer owns
+	// its port, so it must not stay marked as "added".
+	if rule.Enabled {
+		s.linkPortToRule(rule)
+	} else {
+		s.unlinkPortsFromRule(rule.ID)
+	}
 	s.audit(r, "rule.toggle", fmt.Sprintf("%s/%d", rule.Host, rule.Port), strconv.FormatBool(rule.Enabled), aerr == nil)
 	out := map[string]any{"ok": true, "enabled": rule.Enabled, "result": sum}
 	if aerr != nil {
@@ -561,6 +593,12 @@ func (s *Server) handleBulkRules(w http.ResponseWriter, r *http.Request) {
 				failed++
 			} else {
 				applied++
+			}
+			// Bulk enable/disable has to keep the port list honest too.
+			if rule.Enabled {
+				s.linkPortToRule(rule)
+			} else {
+				s.unlinkPortsFromRule(rule.ID)
 			}
 		}
 		result["applied"] = applied
