@@ -327,11 +327,18 @@ onMounted(load)
           <select v-model="scanForm.target_kind" class="select">
             <option value="local">本机（监听端口）</option>
             <option value="cidr">局域网 / 网段（CIDR）</option>
+            <option value="mac">按 MAC 地址（IP 变动也能找到）</option>
           </select>
         </label>
         <label class="field">
-          <span>网段 CIDR</span>
-          <input v-model="scanForm.target_ref" class="input" placeholder="192.168.1.0/24" :disabled="scanForm.target_kind === 'local'" />
+          <span>{{ scanForm.target_kind === 'mac' ? 'MAC 地址 / 前缀' : '网段 CIDR' }}</span>
+          <input
+            v-model="scanForm.target_ref"
+            class="input"
+            :placeholder="scanForm.target_kind === 'mac' ? 'aa:bb:cc:dd:ee:ff 或 aa:bb:cc:*，多个用逗号分隔' : '192.168.1.0/24'"
+            :disabled="scanForm.target_kind === 'local'"
+          />
+          <div v-if="scanForm.target_kind === 'mac'" class="hint">按主机清单中的 MAC 解析当前 IP 后再扫描，DHCP 换址不影响。</div>
         </label>
       </div>
       <label class="field">

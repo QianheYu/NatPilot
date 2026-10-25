@@ -21,6 +21,7 @@ const form = reactive({
   description: '',
   enabled: true,
   match_target_kind: 'any',
+  mac_patterns: '',
   port_ranges: '',
   exclude_ranges: '',
   protocol: 'any',
@@ -53,6 +54,7 @@ function openCreate() {
     description: '',
     enabled: true,
     match_target_kind: 'any',
+    mac_patterns: '',
     port_ranges: '',
     exclude_ranges: '',
     protocol: 'any',
@@ -207,7 +209,11 @@ onMounted(load)
                   <div>{{ p.name }}</div>
                   <div class="small mute">{{ p.description || '' }}</div>
                 </td>
-                <td><Badge>{{ p.match_target_kind }}</Badge></td>
+                <td>
+                  <Badge>{{ p.match_target_kind }}</Badge>
+                  <div v-if="p.mac_patterns" class="mono small mute">{{ p.mac_patterns }}</div>
+                  <div v-else-if="p.mac" class="mono small mute">绑定 {{ p.mac }}</div>
+                </td>
                 <td class="mono small">
                   {{ p.port_ranges || '全部' }}
                   <span v-if="p.port_ranges" class="mute">({{ specPortCount(p.port_ranges) }})</span>
@@ -254,7 +260,13 @@ onMounted(load)
             <option value="any">任意</option>
             <option value="local">本机</option>
             <option value="cidr">网段 / 局域网</option>
+            <option value="mac">MAC 地址 / 前缀</option>
           </select>
+        </label>
+        <label v-if="form.match_target_kind === 'mac'" class="field">
+          <span>MAC 地址 / 前缀</span>
+          <input v-model="form.mac_patterns" class="input" placeholder="aa:bb:cc:dd:ee:ff, aa:bb:cc:* （逗号分隔，可用 OUI 前缀）" />
+          <div class="hint">按主机 MAC 匹配，IP 随 DHCP 变化时依然命中；前缀至少 3 字节。</div>
         </label>
         <label class="field">
           <span>协议</span>

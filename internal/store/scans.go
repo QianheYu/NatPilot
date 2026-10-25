@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 
 	"github.com/ekko-studio/natpilot/internal/model"
 )
@@ -126,7 +127,7 @@ func (s *Store) CountScansSince(ts string) (int, error) {
 
 // ---- policies ----
 
-const policyCols = `id, name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at, mac`
+const policyCols = `id, name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at, mac, mac_patterns`
 
 func scanPolicy(sc interface{ Scan(...any) error }) (*model.Policy, error) {
 	p := &model.Policy{}
@@ -135,7 +136,7 @@ func scanPolicy(sc interface{ Scan(...any) error }) (*model.Policy, error) {
 	var tags model.StringList
 	err := sc.Scan(&p.ID, &p.Name, &p.Description, &enabled, &p.MatchTarget, &p.PortRanges, &p.ExcludeRanges,
 		&p.Protocol, &p.AutoAction, &autoAdd, &tags, &p.Note, &p.MinPort, &p.MaxPort, &p.RequireName, &p.Priority,
-		&createdAt, &updatedAt, &p.MAC)
+		&createdAt, &updatedAt, &p.MAC, &p.MACPatterns)
 	if err != nil {
 		return nil, err
 	}
@@ -161,10 +162,10 @@ func (s *Store) CreatePolicy(p *model.Policy) (int64, error) {
 	if p.AutoAction == "" {
 		p.AutoAction = "watch"
 	}
-	res, err := s.db.Exec(`INSERT INTO policies(name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at, mac)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	res, err := s.db.Exec(`INSERT INTO policies(name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at, mac, mac_patterns)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.Name, p.Description, b2i(p.Enabled), p.MatchTarget, p.PortRanges, p.ExcludeRanges, p.Protocol, p.AutoAction,
-		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, now, normalizeMAC(p.MAC))
+		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, now, normalizeMAC(p.MAC), strings.TrimSpace(p.MACPatterns))
 	if err != nil {
 		return 0, err
 	}
@@ -181,9 +182,9 @@ func (s *Store) UpdatePolicy(p *model.Policy) error {
 	if p.Tags == nil {
 		p.Tags = model.StringList{}
 	}
-	_, err := s.db.Exec(`UPDATE policies SET name=?, description=?, enabled=?, match_target=?, port_ranges=?, exclude_ranges=?, protocol=?, auto_action=?, auto_add=?, tags=?, note=?, min_port=?, max_port=?, require_name=?, priority=?, updated_at=?, mac=? WHERE id=?`,
+	_, err := s.db.Exec(`UPDATE policies SET name=?, description=?, enabled=?, match_target=?, port_ranges=?, exclude_ranges=?, protocol=?, auto_action=?, auto_add=?, tags=?, note=?, min_port=?, max_port=?, require_name=?, priority=?, updated_at=?, mac=?, mac_patterns=? WHERE id=?`,
 		p.Name, p.Description, b2i(p.Enabled), p.MatchTarget, p.PortRanges, p.ExcludeRanges, p.Protocol, p.AutoAction,
-		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, normalizeMAC(p.MAC), p.ID)
+		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, normalizeMAC(p.MAC), strings.TrimSpace(p.MACPatterns), p.ID)
 	if err == nil {
 		p.UpdatedAt = now
 	}

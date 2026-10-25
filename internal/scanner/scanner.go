@@ -29,9 +29,17 @@ type Events interface {
 
 // Request describes a scan to execute.
 type Request struct {
-	Name        string
-	TargetKind  string // local|cidr|remote
-	TargetRef   string // CIDR for cidr/remote, ignored for local
+	Name string
+	// TargetKind is local|cidr|remote|mac.
+	//   local  this machine's listeners
+	//   cidr   a network block
+	//   remote a network block (treated like cidr)
+	//   mac    hosts owning the given hardware addresses, resolved to their
+	//          current IPs so DHCP reassignments do not break the scan
+	TargetKind string
+	// TargetRef is the CIDR for cidr/remote and a comma separated MAC list (full
+	// address or OUI prefix) for mac.
+	TargetRef   string
 	PortsSpec   string
 	FilterPorts bool // when true, PortsSpec acts as a filter (local) or target list
 	Protocol    string
@@ -39,6 +47,10 @@ type Request struct {
 	Trigger     string // manual|schedule|api|auto
 	ApplyPolicy bool
 	MaxHosts    int
+	// SkipLANCheck lets an explicit host-targeted scan (mac) run even when
+	// broad CIDR scanning is disabled: the addresses come from the host list,
+	// not from sweeping a subnet.
+	SkipLANCheck bool
 }
 
 // Scanner runs port scans.
@@ -182,11 +194,14 @@ func (s *Scanner) prepare(req Request) (*model.ScanRun, error) {
 		req.TargetKind = model.ScanTargetLocal
 	}
 	switch req.TargetKind {
-	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote:
+	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote, model.ScanTargetMAC:
 	default:
 		return nil, fmt.Errorf("invalid target kind %q", req.TargetKind)
 	}
 	if req.TargetKind != model.ScanTargetLocal && strings.TrimSpace(req.TargetRef) == "" {
+		if req.TargetKind == model.ScanTargetMAC {
+			return nil, errors.New("至少需要一个 MAC 地址（可用 aa:bb:cc:dd:ee:ff 或前缀 aa:bb:cc）")
+		}
 		return nil, errors.New("target CIDR is required for network scans")
 	}
 	if req.PortsSpec == "" {
@@ -239,6 +254,8 @@ func (s *Scanner) execute(ctx context.Context, run *model.ScanRun, req Request) 
 		ports, err = s.scanLocal(ctx, run, req)
 	case model.ScanTargetCIDR, model.ScanTargetRemote:
 		ports, err = s.scanNetwork(ctx, run, req)
+	case model.ScanTargetMAC:
+		ports, err = s.scanByMAC(ctx, run, req)
 	}
 	duration := time.Since(start)
 
@@ -410,9 +427,66 @@ func (s *Scanner) scanLocal(ctx context.Context, run *model.ScanRun, req Request
 	return out, nil
 }
 
+// scanByMAC scans the hosts that currently own the given hardware addresses.
+//
+// A MAC target is resolved against the hosts table at scan time, which is the
+// whole point: the device may have been given a different IP by DHCP since the
+// scan was configured, and it is still found.
+func (s *Scanner) scanByMAC(ctx context.Context, run *model.ScanRun, req Request) ([]model.DiscoveredPort, error) {
+	patterns := model.ParseMACPatterns(req.TargetRef)
+	if len(patterns) == 0 {
+		return nil, errors.New("至少需要一个 MAC 地址（可用 aa:bb:cc:dd:ee:ff 或前缀 aa:bb:cc）")
+	}
+
+	known, err := s.store.ListHosts(2000)
+	if err != nil {
+		return nil, err
+	}
+	matched := make([]model.Host, 0, len(patterns))
+	seenIP := map[string]bool{}
+	for _, h := range known {
+		if strings.TrimSpace(h.IP) == "" || seenIP[h.IP] {
+			continue
+		}
+		if !model.AnyMACMatch(patterns, h.MAC) {
+			continue
+		}
+		seenIP[h.IP] = true
+		matched = append(matched, h)
+	}
+	if len(matched) == 0 {
+		return nil, fmt.Errorf("没有主机匹配 MAC 范围 %q，请先执行一次“发现局域网主机”以刷新 MAC/IP 对应关系", req.TargetRef)
+	}
+
+	logging.Info("scanner", "resolved MAC target", "patterns", req.TargetRef, "hosts", len(matched))
+
+	out := []model.DiscoveredPort{}
+	var lastErr error
+	for _, h := range matched {
+		if ctx.Err() != nil {
+			break
+		}
+		sub := req
+		sub.TargetKind = model.ScanTargetCIDR
+		sub.TargetRef = h.IP + "/32"
+		sub.SkipLANCheck = true
+		ports, serr := s.scanNetwork(ctx, run, sub)
+		if serr != nil {
+			lastErr = serr
+			logging.Warn("scanner", "MAC target scan failed", "host", h.IP, "mac", h.MAC, "error", serr.Error())
+			continue
+		}
+		out = append(out, ports...)
+	}
+	if len(out) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return out, nil
+}
+
 // scanNetwork performs a TCP connect scan against a CIDR block.
 func (s *Scanner) scanNetwork(ctx context.Context, run *model.ScanRun, req Request) ([]model.DiscoveredPort, error) {
-	if !s.cfg.Scanner.EnableLANScan && req.TargetKind != model.ScanTargetLocal {
+	if !s.cfg.Scanner.EnableLANScan && req.TargetKind != model.ScanTargetLocal && !req.SkipLANCheck {
 		return nil, errors.New("LAN/CIDR scanning is disabled in configuration")
 	}
 	maxHosts := req.MaxHosts

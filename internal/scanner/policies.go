@@ -156,9 +156,19 @@ func policyTargetMatches(pol *model.Policy, p *model.DiscoveredPort, hostMAC str
 	if pol.MAC != "" {
 		return model.SameMAC(pol.MAC, hostMAC)
 	}
+	// A MAC 范围 matches a group of devices by hardware address (full address or
+	// OUI prefix), the DHCP-safe alternative to matching by subnet.
+	if patterns := model.ParseMACPatterns(pol.MACPatterns); len(patterns) > 0 {
+		return model.AnyMACMatch(patterns, hostMAC)
+	}
 	kind := pol.MatchTarget
 	if kind == "" || kind == "any" {
 		return true
+	}
+	// "mac" as a match kind without patterns cannot match anything: silently
+	// falling through to "match everything" would map ports on every host.
+	if kind == model.ScanTargetMAC {
+		return false
 	}
 	if kind == model.ScanTargetLocal {
 		return p.TargetKind == model.ScanTargetLocal

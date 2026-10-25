@@ -215,7 +215,10 @@ CREATE TABLE IF NOT EXISTS policies (
 	updated_at     TEXT,
 	-- Binds the policy to one host by hardware address. DHCP moves the IP, the
 	-- MAC stays, so host-bound policies resolve their target at match time.
-	mac            TEXT NOT NULL DEFAULT ''
+	mac            TEXT NOT NULL DEFAULT '',
+	-- Matches a group of devices by hardware address (full address or OUI
+	-- prefix, comma separated): the "MAC" match kind.
+	mac_patterns   TEXT NOT NULL DEFAULT ''
 );
 -- NOTE: no index on policies(mac) here. This schema block runs before the
 -- ALTER TABLE migrations, so on a database created by an older build the column
@@ -318,6 +321,8 @@ var postMigrations = []string{
 	// Host-bound policies (keyed by MAC) need a column on an existing database.
 	`ALTER TABLE policies ADD COLUMN mac TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS ix_policies_mac ON policies(mac)`,
+	// Policies that match a group of devices by hardware address.
+	`ALTER TABLE policies ADD COLUMN mac_patterns TEXT NOT NULL DEFAULT ''`,
 	// A device that moved to a new DHCP lease used to be stored twice. Keep the
 	// most recently seen row per MAC before the address becomes its own identity,
 	// otherwise the unique index below cannot be created.

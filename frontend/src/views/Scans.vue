@@ -116,7 +116,7 @@ onMounted(load)
                   </div>
                 </td>
                 <td class="small">
-                  {{ s.target_kind === 'local' ? '本机' : s.target_ref }}
+                  {{ s.target_kind === 'local' ? '本机' : s.target_kind === 'mac' ? 'MAC ' + s.target_ref : s.target_ref }}
                   <div v-if="s.hosts_count" class="mute small">{{ s.hosts_count }} 台主机</div>
                 </td>
                 <td class="mono small mute">{{ s.ports_spec }}</td>
@@ -144,7 +144,7 @@ onMounted(load)
 
     <Modal v-if="detail" :title="`扫描 #${detail.id} 结果`" wide @close="detail = null">
       <div class="row wrap" style="margin-bottom: 12px">
-        <span class="badge">范围 {{ detail.target_kind === 'local' ? '本机' : detail.target_ref }}</span>
+        <span class="badge">范围 {{ detail.target_kind === 'local' ? '本机' : detail.target_kind === 'mac' ? 'MAC ' + detail.target_ref : detail.target_ref }}</span>
         <span class="badge">端口 {{ detail.ports_spec }}</span>
         <span class="badge accent">开放 {{ detail.open_count || 0 }}</span>
         <span class="badge">新增 {{ detail.new_count || 0 }}</span>

@@ -30,6 +30,10 @@ const (
 	ScanTargetLocal  = "local"
 	ScanTargetCIDR   = "cidr"
 	ScanTargetRemote = "remote"
+	// ScanTargetMAC targets hosts by hardware address instead of by network:
+	// the address is looked up when the scan starts, so a device that got a new
+	// DHCP lease is still scanned.
+	ScanTargetMAC = "mac"
 )
 
 // Scan run status values.
@@ -166,6 +170,11 @@ type Policy struct {
 	// so a host-bound policy is keyed by the hardware address and the IP is
 	// resolved from the hosts table at match time. Empty means a global policy.
 	MAC string `json:"mac,omitempty"`
+
+	// MACPatterns matches several devices by hardware address (full address or
+	// OUI prefix, comma separated). This is the "MAC" match kind: a policy that
+	// follows a group of devices no matter which addresses DHCP gives them.
+	MACPatterns string `json:"mac_patterns,omitempty"`
 
 	// Computed at read time (not persisted): where the bound host currently is.
 	HostIP   string `json:"host_ip,omitempty"`

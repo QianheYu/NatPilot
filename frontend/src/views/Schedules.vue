@@ -211,11 +211,17 @@ onMounted(load)
             <select v-model="form.target_kind" class="select">
               <option value="local">本机</option>
               <option value="cidr">网段（CIDR）</option>
+              <option value="mac">按 MAC 地址（IP 变动也能找到）</option>
             </select>
           </label>
           <label class="field">
-            <span>CIDR</span>
-            <input v-model="form.target_ref" class="input" placeholder="192.168.1.0/24" :disabled="form.target_kind === 'local'" />
+            <span>{{ form.target_kind === 'mac' ? 'MAC 地址 / 前缀' : 'CIDR' }}</span>
+            <input
+              v-model="form.target_ref"
+              class="input"
+              :placeholder="form.target_kind === 'mac' ? 'aa:bb:cc:dd:ee:ff 或 aa:bb:cc:*' : '192.168.1.0/24'"
+              :disabled="form.target_kind === 'local'"
+            />
           </label>
         </div>
         <label class="field">

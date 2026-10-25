@@ -68,11 +68,35 @@ func (s *Server) buildScanRequest(req scanRequest, trigger string) (scanner.Requ
 		kind = model.ScanTargetLocal
 	}
 	switch kind {
-	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote:
+	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote, model.ScanTargetMAC:
 	default:
-		return scanner.Request{}, fmt.Errorf("target_kind must be local, cidr or remote")
+		return scanner.Request{}, fmt.Errorf("target_kind must be local, cidr, remote or mac")
 	}
-	if kind != model.ScanTargetLocal && strings.TrimSpace(req.TargetRef) == "" {
+	if kind == model.ScanTargetMAC {
+		patterns := model.ParseMACPatterns(req.TargetRef)
+		if len(patterns) == 0 {
+			return scanner.Request{}, fmt.Errorf("target_ref (MAC 地址或前缀) is required for MAC scans")
+		}
+		if len(strings.TrimSpace(req.TargetRef)) > 512 {
+			return scanner.Request{}, fmt.Errorf("target_ref is too long")
+		}
+		// Resolve now so the user gets an immediate answer instead of a scan that
+		// starts and instantly fails because no host owns that address.
+		known, herr := s.app.Store.ListHosts(2000)
+		if herr != nil {
+			return scanner.Request{}, herr
+		}
+		matched := 0
+		for _, h := range known {
+			if model.AnyMACMatch(patterns, h.MAC) {
+				matched++
+			}
+		}
+		if matched == 0 {
+			return scanner.Request{}, fmt.Errorf(
+				"没有主机匹配 MAC 范围 %q，请先执行一次“发现局域网主机”以刷新 MAC/IP 对应关系", req.TargetRef)
+		}
+	} else if kind != model.ScanTargetLocal && strings.TrimSpace(req.TargetRef) == "" {
 		return scanner.Request{}, fmt.Errorf("target_ref (CIDR) is required for network scans")
 	}
 	portsSpec := strings.TrimSpace(req.PortsSpec)
@@ -133,7 +157,29 @@ func (s *Server) handleScanPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	warnings := []string{}
 	hosts := 1
-	if sc.TargetKind != model.ScanTargetLocal {
+	if sc.TargetKind == model.ScanTargetMAC {
+		// Preview a MAC scan by resolving the patterns to the addresses those
+		// devices hold right now — exactly what the scan itself will do.
+		patterns := model.ParseMACPatterns(sc.TargetRef)
+		known, herr := s.app.Store.ListHosts(2000)
+		if herr != nil {
+			writeError(w, http.StatusInternalServerError, herr.Error())
+			return
+		}
+		ips := []string{}
+		for _, h := range known {
+			if model.AnyMACMatch(patterns, h.MAC) && strings.TrimSpace(h.IP) != "" {
+				ips = append(ips, h.IP)
+			}
+		}
+		if len(ips) == 0 {
+			warnings = append(warnings, "没有主机匹配该 MAC 范围，请先执行“发现局域网主机”")
+		}
+		hosts = max(len(ips), 1)
+		out["hosts"] = len(ips)
+		out["host_list"] = ips
+		out["target_preview"] = ips[:min(len(ips), 32)]
+	} else if sc.TargetKind != model.ScanTargetLocal {
 		expanded, eerr := netutil.ExpandCIDR(sc.TargetRef, s.app.Config.Scanner.MaxHostsPerScan)
 		if eerr != nil {
 			writeError(w, http.StatusBadRequest, eerr.Error())
@@ -281,9 +327,20 @@ func validatePolicy(p *model.Policy) error {
 		return fmt.Errorf("auto_action must be add, watch, ignore or delete")
 	}
 	switch p.MatchTarget {
-	case "", "any", model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote:
+	case "", "any", model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote, model.ScanTargetMAC:
 	default:
-		return fmt.Errorf("match_target_kind must be any, local, cidr or remote")
+		return fmt.Errorf("match_target_kind must be any, local, cidr, remote or mac")
+	}
+	// A MAC 范围 policy is only meaningful if it can match something: require a
+	// usable pattern and reject junk early instead of silently matching nothing.
+	if patterns := model.ParseMACPatterns(p.MACPatterns); len(patterns) > 0 {
+		for _, pat := range patterns {
+			if !model.MACPatternValid(pat) {
+				return fmt.Errorf("invalid MAC pattern %q: 需要完整地址 (aa:bb:cc:dd:ee:ff) 或至少 3 字节前缀", pat)
+			}
+		}
+	} else if p.MatchTarget == model.ScanTargetMAC {
+		return fmt.Errorf("match_target_kind=mac 需要填写 mac_patterns")
 	}
 	return nil
 }
