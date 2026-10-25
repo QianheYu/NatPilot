@@ -11,6 +11,7 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test",
     "icons": "node electron/assets/make-icons.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",

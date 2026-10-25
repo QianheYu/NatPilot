@@ -9,7 +9,9 @@
 //     (⌘Q on macOS is honoured as an explicit quit request),
 //   * the tray also exposes 系统设置 (the runtime configuration page),
 //     重启服务 (needed after settings that require a new process: listen port,
-//     TLS, ...), 在浏览器中打开 and 打开数据目录,
+//     TLS, ...), 在浏览器中打开, 打开数据目录, 开机自启 and 检查更新,
+//   * started as a login item (`--autostart`) it stays in the tray without
+//     opening a window, and still boots the server,
 //   * killing the app always stops the server child process.
 //
 // Run:  npm install && npm start      (development)
@@ -18,9 +20,12 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const http = require('node:http')
+const https = require('node:https')
 const net = require('node:net')
 const path = require('node:path')
 const fs = require('node:fs')
+const autostart = require('./autostart')
+const { isNewer } = require('./version')
 
 let serverProcess = null
 let mainWindow = null
@@ -29,6 +34,15 @@ let serverURL = null
 let quitting = false
 
 const TRAY_TOOLTIP = 'NatPilot — NAT 端口映射控制台'
+
+// AUTOSTART_ARG is appended to the login item command; when the shell is started
+// with it (i.e. by the OS at login) no window is opened, only the tray appears.
+const STARTED_HIDDEN = process.argv.includes(autostart.AUTOSTART_ARG)
+
+// UPDATE_REPO is the GitHub repository the "检查更新" entry asks for the latest
+// release. It points at the upstream project, so forks should change it.
+const UPDATE_REPO = 'ekko-studio/natpilot'
+const UPDATE_TIMEOUT_MS = 8000
 
 // ---------------------------------------------------------------- window state
 
@@ -439,6 +453,172 @@ function ensureServer() {
   return serverStartPromise
 }
 
+// ------------------------------------------------------- autostart + updates
+
+// appVersion is the version the update check compares against. It is read from
+// the packaged package.json instead of app.getVersion() so it stays correct even
+// when the executable's version resource was not stamped (electron-builder's
+// signAndEditExecutable=false, used for offline builds) — otherwise the check
+// could compare against Electron's own version.
+let cachedAppVersion = null
+
+function appVersion() {
+  if (cachedAppVersion) return cachedAppVersion
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
+    if (pkg && pkg.version) {
+      cachedAppVersion = String(pkg.version)
+      return cachedAppVersion
+    }
+  } catch {
+    /* fall back to whatever Electron reports */
+  }
+  try {
+    cachedAppVersion = app.getVersion()
+  } catch {
+    cachedAppVersion = '0.0.0'
+  }
+  return cachedAppVersion
+}
+
+// canAutoStart: registering a login item only makes sense for an installed build.
+// Under `npm start` the "executable" would be electron.exe, so the entry is shown
+// but disabled instead of registering something that cannot work.
+function canAutoStart() {
+  return app.isPackaged
+}
+
+function autoStartEnabled() {
+  if (!canAutoStart()) return false
+  return autostart.autoStartEnabled(app, { execPath: autostartExecPath() })
+}
+
+// autostartExecPath: an AppImage re-mounts to a random directory on every run, so
+// the login entry has to point at the AppImage file itself, not at execPath.
+function autostartExecPath() {
+  return process.env.APPIMAGE || process.execPath
+}
+
+// toggleAutoStart is the tray checkbox handler.
+function toggleAutoStart(enabled) {
+  try {
+    autostart.applyAutoStart(app, enabled, autostartExecPath())
+  } catch (err) {
+    dialog.showErrorBox('无法修改开机自启', String((err && err.message) || err))
+  }
+  // The menu is rebuilt from scratch: do it after the click has been handled so
+  // the tick state comes from the OS instead of the item that was just clicked.
+  setImmediate(() => updateTray())
+}
+
+// fetchLatestRelease asks GitHub for the newest published release.
+function fetchLatestRelease(repo, timeoutMs = UPDATE_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const url = `https://api.github.com/repos/${repo}/releases/latest`
+    const req = https.get(
+      url,
+      {
+        headers: {
+          'User-Agent': `NatPilot-Desktop/${appVersion()}`,
+          Accept: 'application/vnd.github+json',
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => {
+          body += chunk
+          if (body.length > 512 * 1024) {
+            req.destroy(new Error('版本信息过大'))
+          }
+        })
+        res.on('end', () => {
+          // 404 means the repository has no published release yet (or is private):
+          // that is not a failure, it just means there is nothing to update to.
+          if (res.statusCode === 404) {
+            resolve(null)
+            return
+          }
+          if (res.statusCode !== 200) {
+            reject(new Error(`HTTP ${res.statusCode}`))
+            return
+          }
+          try {
+            resolve(JSON.parse(body))
+          } catch {
+            reject(new Error('无法解析版本信息'))
+          }
+        })
+      }
+    )
+    req.on('timeout', () => req.destroy(new Error('请求超时')))
+    req.on('error', reject)
+  })
+}
+
+let updateChecking = false
+
+// checkForUpdates reports the result. interactive=false (the check after login)
+// stays silent unless there really is a newer release.
+async function checkForUpdates(interactive = false) {
+  if (updateChecking) return
+  updateChecking = true
+  updateTray()
+  const current = appVersion()
+  try {
+    const release = await fetchLatestRelease(UPDATE_REPO)
+    if (!release) {
+      if (interactive) {
+        await dialog.showMessageBox({
+          type: 'info',
+          title: '检查更新',
+          message: `已是最新版本 v${current}`,
+          detail: '该项目还没有发布可用的更新版本。',
+          noLink: true,
+        })
+      }
+      return
+    }
+    const latest = String(release.tag_name || release.name || '')
+    if (isNewer(latest, current)) {
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        title: '发现新版本',
+        message: `发现新版本 ${latest}（当前 v${current}）`,
+        detail: release.name ? String(release.name) : '可以打开发布页获取新版本。',
+        buttons: ['打开发布页', '稍后'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      })
+      if (response === 0 && release.html_url) shell.openExternal(String(release.html_url))
+    } else if (interactive) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: '检查更新',
+        message: `已是最新版本 v${current}`,
+        noLink: true,
+      })
+    }
+  } catch (err) {
+    if (interactive) {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: '检查更新失败',
+        message: '无法获取版本信息',
+        detail: `${(err && err.message) || err}\n\n请检查网络连接后重试。`,
+        noLink: true,
+      })
+    } else {
+      console.warn(`[natpilot] update check skipped: ${(err && err.message) || err}`)
+    }
+  } finally {
+    updateChecking = false
+    updateTray()
+  }
+}
+
 // ---------------------------------------------------------------- window
 
 async function createWindow() {
@@ -607,19 +787,34 @@ function createTray() {
 // start or restart is already running, and the status line carries the URL.
 function trayTemplate() {
   const running = Boolean(serverProcess) && Boolean(serverURL)
+  const autoStartLabel = canAutoStart() ? '开机自启' : '开机自启（仅安装版可用）'
   return [
     {
       label: running ? `NatPilot 运行中 — ${serverURL}` : 'NatPilot 服务未运行',
       enabled: false,
     },
     { type: 'separator' },
-    { label: '打开控制台', enabled: running, click: () => showWindow() },
-    { label: '系统设置…', enabled: running, click: () => openSettings() },
+    { label: '打开控制台', click: () => showWindow() },
+    { label: '系统设置…', click: () => openSettings() },
     { label: '在浏览器中打开', enabled: running, click: () => serverURL && shell.openExternal(serverURL) },
+    { type: 'separator' },
+    {
+      label: autoStartLabel,
+      type: 'checkbox',
+      checked: autoStartEnabled(),
+      enabled: canAutoStart(),
+      click: (item) => toggleAutoStart(item.checked),
+    },
+    {
+      label: updateChecking ? '正在检查更新…' : '检查更新…',
+      enabled: !updateChecking,
+      click: () => checkForUpdates(true),
+    },
     { type: 'separator' },
     { label: '重启服务', enabled: !restarting, click: () => restartService() },
     { label: '打开数据目录', click: () => openDataDir() },
     { type: 'separator' },
+    { label: `NatPilot v${appVersion()}`, enabled: false },
     { label: '退出 NatPilot', click: () => quitApp() },
   ]
 }
@@ -672,7 +867,22 @@ if (!gotLock) {
     // Windows groups taskbar entries and notifications by AppUserModelID.
     if (process.platform === 'win32') app.setAppUserModelId('com.natpilot.desktop')
     createTray()
-    await createWindow()
+    if (STARTED_HIDDEN) {
+      // Launched by the OS at login: stay in the tray, but boot the server anyway
+      // so the console is ready the moment the user opens it.
+      try {
+        await ensureServer()
+      } catch (err) {
+        console.warn(`[natpilot] autostart could not start the server: ${(err && err.message) || err}`)
+      }
+      updateTray()
+    } else {
+      await createWindow()
+    }
+    // One silent update check shortly after boot; the tray entry can be used for
+    // an on-demand check with visible feedback.
+    const timer = setTimeout(() => checkForUpdates(false), 10000)
+    if (timer && typeof timer.unref === 'function') timer.unref()
   })
 
   // Stay resident: closing every window must not quit the app.
