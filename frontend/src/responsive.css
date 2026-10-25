@@ -93,6 +93,25 @@ pre,
   min-width: 232px;
 }
 
+/* Cards that share a row must share a height: the dashboard pairs a short
+   gateway table with a taller status list, and a shrink-wrapped card next to a
+   stretched one leaves a ragged bottom edge. `stretch` is the grid default, but
+   the views used to override it with `align-items: start`, so it is stated
+   explicitly here and the body is allowed to fill the extra space. */
+.equal-height {
+  align-items: stretch;
+}
+
+.equal-height > .card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.equal-height > .card > .card-body {
+  flex: 1 1 auto;
+}
+
 /* ------------------------------------------------- 2. grids: fluid columns */
 
 /* `auto-fit` + `min()` gives a column count that follows the available width

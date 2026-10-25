@@ -127,7 +127,8 @@ onMounted(load)
       </div>
     </div>
 
-    <div class="grid cols-2" style="grid-template-columns: 1.4fr 1fr; align-items: start">
+    <!-- equal-height: both cards in this row stretch to the taller one -->
+    <div class="grid cols-2 equal-height" style="grid-template-columns: 1.4fr 1fr">
       <div class="card">
         <div class="card-head">
           <h3>映射状态分布</h3>
@@ -176,7 +177,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div class="grid cols-2" style="margin-top: 16px; align-items: start">
+    <div class="grid cols-2 equal-height" style="margin-top: 16px">
       <div class="card">
         <div class="card-head">
           <h3>最近变更的映射</h3>
