@@ -217,9 +217,10 @@ CREATE TABLE IF NOT EXISTS policies (
 	-- MAC stays, so host-bound policies resolve their target at match time.
 	mac            TEXT NOT NULL DEFAULT ''
 );
-
--- Fast lookup of the policies that follow one host.
-CREATE INDEX IF NOT EXISTS ix_policies_mac ON policies(mac);
+-- NOTE: no index on policies(mac) here. This schema block runs before the
+-- ALTER TABLE migrations, so on a database created by an older build the column
+-- does not exist yet and an index here would abort the whole migration. The
+-- index is created in postMigrations, after the column is added.
 
 CREATE TABLE IF NOT EXISTS schedules (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
