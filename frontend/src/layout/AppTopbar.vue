@@ -83,9 +83,13 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
     <button
       class="tb-toggle"
       :title="collapsed ? '展开侧边栏' : '收起侧边栏'"
+      aria-label="切换侧边栏"
       @click="emit('toggle-sidebar')"
     >
-      {{ collapsed ? '»' : '«' }}
+      <!-- Below 860px the sidebar is a drawer, so the glyph becomes a menu
+           button; responsive.css picks which one is shown. -->
+      <span class="tg-wide">{{ collapsed ? '»' : '«' }}</span>
+      <span class="tg-narrow">☰</span>
     </button>
 
     <div class="crumbs">
@@ -117,7 +121,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
         🔔
         <span v-if="unread > 0" class="tb-badge-dot">{{ unread > 99 ? '99+' : unread }}</span>
       </button>
-      <div v-if="open === 'notif'" class="popover" style="width: 360px" @click.stop>
+      <div v-if="open === 'notif'" class="popover popover-notif" @click.stop>
         <div class="popover-head">
           <span>通知</span>
           <span class="small dim">{{ unread > 0 ? unread + ' 条未读' : '全部已读' }}</span>
@@ -160,7 +164,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
         <span v-if="!collapsed" class="tb-user-name">{{ displayName }}</span>
         <span class="dim">▾</span>
       </button>
-      <div v-if="open === 'user'" class="popover" style="min-width: 232px" @click.stop>
+      <div v-if="open === 'user'" class="popover popover-user" @click.stop>
         <div class="pop-user">
           <div class="pop-user-name">{{ displayName }}</div>
           <div class="pop-user-meta">

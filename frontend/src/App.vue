@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api, { setUnauthorizedHandler } from './api'
 import { store, applyTheme, toggleTheme, dismissToast, toastWarn } from './store'
 import { useLive } from './composables/useLive'
+import { useResponsiveTables } from './composables/useResponsiveTables'
 import { visibleModules, flatPages } from './nav'
 import AppSidebar from './layout/AppSidebar.vue'
 import AppTopbar from './layout/AppTopbar.vue'
@@ -23,6 +24,10 @@ const unreadPorts = ref(0)
 const unreadEvents = ref(0)
 const notifEvents = ref([])
 const monitorActive = ref(false)
+
+// Holds <router-view>; tables inside it are re-labelled for the phone card layout.
+const contentEl = ref(null)
+useResponsiveTables(contentEl)
 
 const live = useLive((ev) => {
   if (ev.type === 'changed') {
@@ -148,6 +153,19 @@ watch(
   },
 )
 
+// Opening the drawer locks the page behind it: on a phone the sidebar would
+// otherwise scroll the content underneath while the finger drags.
+watch(mobileOpen, (open) => {
+  if (typeof document === 'undefined') return
+  document.body.classList.toggle('drawer-open', open)
+})
+
+// The drawer only makes sense below the 860px breakpoint; growing the window
+// back past it must close it or the page stays locked.
+function onResize() {
+  if (window.innerWidth > 860 && mobileOpen.value) mobileOpen.value = false
+}
+
 watch(
   () => route.meta.title,
   (t) => {
@@ -158,11 +176,17 @@ watch(
 
 onMounted(async () => {
   window.addEventListener('keydown', onKey)
+  window.addEventListener('resize', onResize)
   await boot()
+  await nextTick()
   refreshBadges()
 })
 
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('resize', onResize)
+  document.body.classList.remove('drawer-open')
+})
 
 defineExpose({ refreshBadges })
 </script>
@@ -177,8 +201,13 @@ defineExpose({ refreshBadges })
 
   <router-view v-else-if="isLogin" />
 
-  <div v-else class="app-shell" :class="{ 'is-collapsed': collapsed, 'mobile-open': mobileOpen }">
+  <div
+    v-else
+    class="app-shell"
+    :class="{ 'is-collapsed': collapsed, 'mobile-open': mobileOpen }"
+  >
     <AppSidebar
+      :class="{ 'is-open': mobileOpen }"
       :modules="navModules"
       :collapsed="collapsed"
       :version="store.meta.version"
@@ -207,12 +236,16 @@ defineExpose({ refreshBadges })
       @logout="doLogout"
     />
 
-    <main class="app-content">
+    <main ref="contentEl" class="app-content">
       <router-view v-slot="{ Component }">
         <component :is="Component" :key="route.fullPath" />
       </router-view>
     </main>
   </div>
+
+  <!-- Tapping outside the drawer closes it. Rendered outside .app-shell so the
+       fixed overlay never takes part in the shell grid. -->
+  <div v-if="mobileOpen" class="drawer-scrim" @click="mobileOpen = false" />
 
   <CommandPalette :open="paletteOpen" :pages="pages" @close="paletteOpen = false" @pick="onPick" />
 

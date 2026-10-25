@@ -1,0 +1,523 @@
+/* ============================================================================
+   Responsive layer — imported last, so it owns every breakpoint.
+   ----------------------------------------------------------------------------
+   The console runs in three shapes: a full desktop window, a tablet, and a
+   phone-sized window (the desktop shell can be resized down to ~360px). This
+   file is the single place that decides how the layout adapts:
+
+     * grids collapse with `auto-fit` instead of hard column counts, so any
+       width between the breakpoints still looks intentional;
+     * the sidebar becomes an off-canvas drawer with a scrim below 860px;
+     * data tables turn into labelled cards below 720px instead of forcing a
+       horizontal scroll (the labels come from the table header, filled in by
+       `useResponsiveTables` in App.vue);
+     * tap targets grow on touch devices;
+     * nothing is allowed to overflow the viewport horizontally.
+
+   Breakpoints: 1100 (laptop) · 860 (tablet/drawer) · 720 (table cards)
+                560 (phone) · 420 (small phone)
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- 1. base */
+
+/* Grid and flex children default to `min-width:auto`, which lets long words and
+   wide tables push a track past its container. Everything that holds page
+   content is allowed to shrink instead. */
+.app-shell,
+.app-content,
+.app-content > *,
+.grid > *,
+.toolbar > *,
+.card,
+.card-body,
+.stat,
+.field {
+  min-width: 0;
+}
+
+.app-content > * {
+  max-width: 100%;
+}
+
+/* Long unbreakable strings (URLs, tokens, base64 in the log tail) must wrap
+   rather than widen the page. */
+.card-body,
+.stat,
+.log-tail,
+td,
+th {
+  overflow-wrap: anywhere;
+}
+
+.log-tail .ln {
+  flex-wrap: wrap;
+}
+
+.log-tail .ln > * {
+  min-width: 0;
+}
+
+.table-wrap {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Inline SVG / canvas / iframes never exceed their container. */
+img,
+svg,
+canvas {
+  max-width: 100%;
+}
+
+iframe {
+  max-width: 100%;
+  border: 0;
+}
+
+pre,
+.app-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* The sidebar toggle is a collapse arrow on desktop and a menu button once the
+   sidebar becomes a drawer (see §4). */
+.tb-toggle .tg-narrow {
+  display: none;
+}
+
+.popover-notif {
+  width: 360px;
+}
+
+.popover-user {
+  min-width: 232px;
+}
+
+/* ------------------------------------------------- 2. grids: fluid columns */
+
+/* `auto-fit` + `min()` gives a column count that follows the available width
+   without a breakpoint per grid: full 4/3/2/1 columns on desktop, and it never
+   overflows once the container is narrower than one column. */
+.cols-2 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+}
+.cols-3 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+.cols-4 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+
+/* --------------------------------------------------------- 3. ≤ 1100px */
+
+@media (max-width: 1100px) {
+  /* The search field keeps only its icon; the palette is still one click or
+     Ctrl+K away. */
+  .tb-search {
+    flex-basis: 40px;
+    justify-content: center;
+  }
+  .tb-search .tb-search-text,
+  .tb-search .kbd {
+    display: none;
+  }
+
+  .app-content {
+    padding: 18px 18px 44px;
+  }
+}
+
+/* ------------------------------------- 4. ≤ 860px: drawer instead of column */
+
+@media (max-width: 860px) {
+  .app-shell,
+  .app-shell.is-collapsed {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'topbar'
+      'content';
+  }
+
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 120;
+    width: var(--sidebar-w);
+    max-width: 86vw;
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+    box-shadow: var(--shadow);
+    overflow-y: auto;
+  }
+
+  /* The open state is driven by a class on the <aside> itself. !important is
+     deliberate: this must win over the base sidebar rules regardless of the
+     order the stylesheets end up in after minification. */
+  .app-sidebar.is-open {
+    transform: translateX(0px) !important;
+  }
+
+  /* A real element (rendered by App.vue) rather than a ::after, so tapping it
+     can close the drawer and so it can respect the safe area on phones. */
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 110;
+    background: rgba(3, 7, 14, 0.5);
+    backdrop-filter: blur(1px);
+  }
+
+  /* Scroll lock while the drawer is open (set by App.vue). */
+  body.drawer-open {
+    overflow: hidden;
+    touch-action: none;
+  }
+
+  .app-content {
+    padding: 14px 14px 40px;
+  }
+
+  /* The account name does not fit next to the avatar any more. */
+  .tb-user-name {
+    display: none;
+  }
+
+  .tb-toggle .tg-wide {
+    display: none;
+  }
+
+  .tb-toggle .tg-narrow {
+    display: inline;
+  }
+
+  .crumbs {
+    min-width: 0;
+  }
+
+  .crumb-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .popover {
+    max-width: calc(100vw - 24px);
+  }
+}
+
+/* --------------------------------------------- 5. ≤ 720px: tables as cards */
+
+@media (max-width: 720px) {
+  /* `data-stack="1"` is set by the table labeller for tables that have a header
+     row (a table without headers has nothing to label the cells with). */
+  table.data[data-stack='1'] {
+    width: 100%;
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  table.data[data-stack='1'] thead {
+    display: none;
+  }
+
+  table.data[data-stack='1'],
+  table.data[data-stack='1'] tbody,
+  table.data[data-stack='1'] tr,
+  table.data[data-stack='1'] td {
+    display: block;
+    width: 100%;
+  }
+
+  table.data[data-stack='1'] tbody tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    padding: 4px 0;
+    margin-bottom: 10px;
+  }
+
+  table.data[data-stack='1'] tbody tr:hover {
+    background: var(--bg-elev);
+  }
+
+  table.data[data-stack='1'] td {
+    display: grid;
+    grid-template-columns: minmax(76px, 38%) 1fr;
+    gap: 10px;
+    align-items: baseline;
+    padding: 8px 12px;
+    border: 0;
+    border-bottom: 1px dashed var(--border-soft);
+    text-align: left !important;
+    white-space: normal;
+  }
+
+  table.data[data-stack='1'] td:last-child {
+    border-bottom: 0;
+  }
+
+  table.data[data-stack='1'] td::before {
+    content: attr(data-label);
+    color: var(--text-mute);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  /* Cells with no header text (spacer / action columns) take the full row. */
+  table.data[data-stack='1'] td:not([data-label]),
+  table.data[data-stack='1'] td[data-label=''] {
+    display: block;
+    text-align: left !important;
+  }
+
+  table.data[data-stack='1'] td:not([data-label])::before,
+  table.data[data-stack='1'] td[data-label='']::before {
+    display: none;
+  }
+
+  /* A row that only carries an empty state spans the whole card. */
+  table.data[data-stack='1'] td[colspan] {
+    display: block;
+    border-bottom: 0;
+  }
+
+  table.data[data-stack='1'] td[colspan]::before {
+    display: none;
+  }
+
+  /* Toolbars: buttons share the row evenly instead of a ragged wrap. */
+  .toolbar {
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .toolbar .btn,
+  .toolbar > button {
+    flex: 1 1 132px;
+    justify-content: center;
+  }
+
+  .toolbar .grow {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .card-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .stat .value {
+    font-size: 21px;
+  }
+
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .modal {
+    max-height: 92vh;
+    border-radius: var(--radius);
+  }
+
+  .modal-body {
+    padding: 14px;
+  }
+
+  .modal-head {
+    padding: 13px 14px;
+  }
+
+  .modal-foot {
+    padding: 12px 14px;
+    flex-wrap: wrap;
+  }
+
+  .modal-foot .btn {
+    flex: 1 1 120px;
+    justify-content: center;
+  }
+
+  .cp-overlay {
+    padding-top: 7vh;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .cp-box {
+    width: 100%;
+    max-height: 78vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cp-list {
+    overflow-y: auto;
+  }
+}
+
+/* ------------------------------------------------------ 6. ≤ 560px: phone */
+
+@media (max-width: 560px) {
+  /* The chips are status decoration; at this width the tray/notification dot
+     already carries the information. */
+  .tb-chip {
+    display: none;
+  }
+
+  /* Only the page title survives the breadcrumb. */
+  .crumb-module,
+  .crumb-sep {
+    display: none;
+  }
+
+  .app-topbar {
+    padding: 0 10px;
+    gap: 6px;
+  }
+
+  .crumb-title {
+    font-size: 14.5px;
+  }
+
+  .app-content {
+    padding: 12px 12px 36px;
+  }
+
+  .card-body {
+    padding: 12px;
+  }
+
+  .card-head {
+    padding: 11px 12px;
+  }
+
+  .popover {
+    width: calc(100vw - 20px) !important;
+    min-width: 0 !important;
+    right: -4px;
+  }
+
+  .toolbar .btn,
+  .toolbar > button {
+    flex: 1 1 100%;
+  }
+
+  .stat {
+    padding: 12px 14px;
+  }
+
+  /* Two-column label/value cells get more room for the value. */
+  table.data[data-stack='1'] td {
+    grid-template-columns: minmax(66px, 34%) 1fr;
+    gap: 8px;
+    padding: 7px 10px;
+  }
+
+  .toasts {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+  }
+
+  .toast {
+    max-width: none;
+  }
+}
+
+/* -------------------------------------------------- 7. ≤ 420px: small phone */
+
+@media (max-width: 420px) {
+  .app-content {
+    padding: 10px 10px 32px;
+  }
+
+  .crumb-title {
+    font-size: 13.5px;
+  }
+
+  .stat .value {
+    font-size: 19px;
+  }
+
+  .kbd {
+    display: none;
+  }
+
+  /* Keep the drawer from covering the whole screen — a sliver of page stays
+     visible (and tappable through the scrim) to signal "this is an overlay". */
+  .app-sidebar {
+    max-width: 82vw;
+  }
+}
+
+/* ------------------------------------------------ 8. touch / coarse pointer */
+
+@media (pointer: coarse) {
+  .btn {
+    min-height: 40px;
+  }
+
+  .btn.sm {
+    min-height: 34px;
+  }
+
+  .tb-icon,
+  .tb-toggle,
+  .tb-avatar,
+  .tb-search {
+    min-width: 42px;
+    min-height: 42px;
+  }
+
+  .pop-item,
+  .cp-item {
+    min-height: 46px;
+  }
+
+  .switch {
+    min-height: 34px;
+  }
+
+  /* Hover styling sticks on touch devices; only show it for hover-capable ones. */
+  table.data tbody tr:hover {
+    background: transparent;
+  }
+}
+
+/* ------------------------------------------- 9. short landscape (phones) */
+
+@media (max-height: 560px) and (orientation: landscape) {
+  .cp-overlay {
+    padding-top: 3vh;
+  }
+
+  .cp-box {
+    max-height: 92vh;
+  }
+
+  .modal {
+    max-height: 94vh;
+  }
+
+  .app-sidebar .sb-nav {
+    padding-bottom: 20px;
+  }
+}
+
+/* ------------------------------------------------- 10. reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar,
+  .modal,
+  .cp-box,
+  .toast {
+    transition: none !important;
+    animation: none !important;
+  }
+}
