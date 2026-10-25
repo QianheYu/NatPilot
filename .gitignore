@@ -46,3 +46,8 @@ internal/webui/dist/.probe-write.txt
 
 # Secrets
 .env
+
+# Local tooling configs that are not part of the product (an AI provider/model
+# catalogue and an editor-assistant project file live in the checkout root).
+/config.json
+/opencode.jsonc
