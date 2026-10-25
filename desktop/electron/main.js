@@ -7,13 +7,16 @@
 //   * lives in the system tray: closing the window only hides it,
 //   * the only way to really stop it is "退出 NatPilot" in the tray menu
 //     (⌘Q on macOS is honoured as an explicit quit request),
+//   * the tray also exposes 系统设置 (the runtime configuration page),
+//     重启服务 (needed after settings that require a new process: listen port,
+//     TLS, ...), 在浏览器中打开 and 打开数据目录,
 //   * killing the app always stops the server child process.
 //
 // Run:  npm install && npm start      (development)
 //       npm run dist                  (package with electron-builder)
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron')
-const { spawn } = require('node:child_process')
+const { spawn, spawnSync } = require('node:child_process')
 const http = require('node:http')
 const net = require('node:net')
 const path = require('node:path')
@@ -179,7 +182,7 @@ function serverArgs(port, dataDir) {
 
 function spawnServer(binPath, port, dataDir) {
   return spawn(binPath, serverArgs(port, dataDir), {
-    env: { ...process.env, NATPILOT_DESKTOP: '1' },
+    env: { ...process.env, NATPILOT_DESKTOP: '1', NATPILOT_PARENT_PID: String(process.pid) },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
@@ -275,9 +278,15 @@ function launchAndWait(binPath, port, dataDir, url, readyTimeoutMs) {
 // fresh port and a child that dies early or never answers /api/health is retried a
 // bounded number of times — inside one overall deadline — before startup fails
 // with a message that lists what was tried. It never loops forever.
+// dataDirPath is the directory the Go server keeps its database in. The desktop
+// shell owns it so the tray can reveal it and so every start uses the same path.
+function dataDirPath() {
+  return path.join(app.getPath('userData'), 'natpilot')
+}
+
 async function startServer() {
   const { path: binPath, probed } = serverBinary()
-  const dataDir = path.join(app.getPath('userData'), 'natpilot')
+  const dataDir = dataDirPath()
   const deadline = Date.now() + SERVER_START_DEADLINE_MS
   const failures = []
   for (let attempt = 1; attempt <= SERVER_START_ATTEMPTS; attempt++) {
@@ -526,6 +535,56 @@ function updateTray() {
   if (!tray) return
   const running = Boolean(serverProcess)
   tray.setToolTip(`${TRAY_TOOLTIP}${running ? '' : '（服务未运行）'}`)
+  tray.setContextMenu(Menu.buildFromTemplate(trayTemplate()))
+}
+
+// openSettings brings the console up on the 系统设置 page, which is where the
+// runtime configuration lives (settings that need a new process, such as the
+// listening port or TLS, take effect after 托盘 → 重启服务).
+async function openSettings() {
+  try {
+    const url = serverURL || (await ensureServer())
+    showWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await mainWindow.loadURL(`${url}/#/settings`)
+    }
+  } catch (err) {
+    if (!quitting) {
+      dialog.showErrorBox('无法打开系统设置', String((err && err.message) || err))
+    }
+  }
+}
+
+// restartService stops the child and boots a fresh one, then reloads the window
+// onto the new URL (the port may change). This is what makes settings edits that
+// need a restart usable from inside the desktop shell.
+let restarting = false
+
+async function restartService() {
+  if (restarting) return
+  restarting = true
+  updateTray()
+  try {
+    await stopServer()
+    const url = await ensureServer()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await mainWindow.loadURL(url)
+    }
+    showWindow()
+  } catch (err) {
+    if (!quitting) {
+      dialog.showErrorBox('重启 NatPilot 服务失败', String((err && err.message) || err))
+    }
+  } finally {
+    restarting = false
+    updateTray()
+  }
+}
+
+function openDataDir() {
+  shell.openPath(dataDirPath()).then((msg) => {
+    if (msg) dialog.showErrorBox('无法打开数据目录', `${dataDirPath()}\n\n${msg}`)
+  })
 }
 
 function createTray() {
@@ -536,17 +595,33 @@ function createTray() {
   }
   tray = new Tray(image)
   tray.setToolTip(TRAY_TOOLTIP)
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '打开控制台', click: () => showWindow() },
-      { label: '在浏览器中打开', click: () => serverURL && shell.openExternal(serverURL) },
-      { type: 'separator' },
-      { label: '退出 NatPilot', click: () => quitApp() },
-    ])
-  )
+  tray.setContextMenu(Menu.buildFromTemplate(trayTemplate()))
   // double click re-opens the window on windows/linux; macOS opens the menu.
   tray.on('double-click', () => showWindow())
   return true
+}
+
+// trayTemplate builds the tray menu. It is rebuilt whenever the service state
+// changes (see updateTray) so the entries reflect reality: the console entry is
+// enabled only once there is a server to show, "重启服务" is disabled while a
+// start or restart is already running, and the status line carries the URL.
+function trayTemplate() {
+  const running = Boolean(serverProcess) && Boolean(serverURL)
+  return [
+    {
+      label: running ? `NatPilot 运行中 — ${serverURL}` : 'NatPilot 服务未运行',
+      enabled: false,
+    },
+    { type: 'separator' },
+    { label: '打开控制台', enabled: running, click: () => showWindow() },
+    { label: '系统设置…', enabled: running, click: () => openSettings() },
+    { label: '在浏览器中打开', enabled: running, click: () => serverURL && shell.openExternal(serverURL) },
+    { type: 'separator' },
+    { label: '重启服务', enabled: !restarting, click: () => restartService() },
+    { label: '打开数据目录', click: () => openDataDir() },
+    { type: 'separator' },
+    { label: '退出 NatPilot', click: () => quitApp() },
+  ]
 }
 
 // ---------------------------------------------------------------- lifecycle
@@ -557,6 +632,33 @@ function quitApp() {
   quitting = true
   app.quit()
 }
+
+// killServerOnExit is the last line of defence against an orphaned server: when
+// the main process dies from a signal or an unexpected exit (crash, "结束任务"
+// from the task manager, a failed quit path), the Go child would otherwise keep
+// the loopback port bound and stay visible in the process list. spawnSync is
+// used on purpose — the 'exit' hook cannot await an async kill.
+function killServerOnExit() {
+  const child = serverProcess
+  if (!child || !child.pid) return
+  serverProcess = null
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+    } else {
+      child.kill('SIGKILL')
+    }
+  } catch {
+    /* the process is already gone */
+  }
+}
+
+process.on('exit', killServerOnExit)
+process.on('SIGINT', () => quitApp())
+process.on('SIGTERM', () => quitApp())
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {

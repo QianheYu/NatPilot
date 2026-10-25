@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -76,7 +77,7 @@ func main() {
 	}
 
 	cmd := exec.CommandContext(ctx, lookup.Path, args...)
-	cmd.Env = append(os.Environ(), "NATPILOT_DESKTOP=1")
+	cmd.Env = append(os.Environ(), "NATPILOT_DESKTOP=1", "NATPILOT_PARENT_PID="+strconv.Itoa(os.Getpid()))
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	cmd.Stdin = nil

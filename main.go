@@ -245,6 +245,14 @@ func cmdServe(ctx context.Context, flags map[string]string, args []string) int {
 	if err := parseServeFlags(args, flags); err != nil {
 		return 2
 	}
+	// A desktop shell sets NATPILOT_PARENT_PID: if that process disappears (crash,
+	// "结束任务"), cancel the context so this server shuts down instead of
+	// lingering as an orphan holding the loopback port.
+	ctx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
+	stopParentWatch := app.WatchParent(cancelServe)
+	defer stopParentWatch()
+
 	a, err := app.Build(ctx, app.Options{ConfigPath: flags["config"], Flags: flags, Version: version})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

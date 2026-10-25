@@ -2,6 +2,11 @@
   "name": "natpilot-desktop",
   "version": "0.1.0",
   "private": true,
+  "author": {
+    "name": "NatPilot",
+    "email": "dev@natpilot.local"
+  },
+  "homepage": "https://github.com/ekko-studio/natpilot",
   "description": "NatPilot desktop edition: native window plus a tray-resident shell (closing the window keeps the server running; quit from the tray menu).",
   "main": "electron/main.js",
   "scripts": {
