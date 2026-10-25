@@ -154,12 +154,45 @@ func scanHost(sc interface{ Scan(...any) error }) (*model.Host, error) {
 }
 
 // UpsertHost records a host observation.
+//
+// Identity is the MAC address when the observation carries one: a DHCP lease
+// change means the same device shows up at a new IP, and matching on IP alone
+// would create a second row (losing the "this is the host I monitor" link) and
+// leave a stale entry behind. The lookup falls back to the IP for observations
+// without a MAC (loopback interfaces, some virtual adapters).
 func (s *Store) UpsertHost(h *model.Host) error {
 	now := model.Time{}
 	_ = now.Scan(Now())
+	mac := normalizeMAC(h.MAC)
+
 	var id int64
 	var seen int
-	err := s.db.QueryRow(`SELECT id, seen_count FROM hosts WHERE ip=?`, h.IP).Scan(&id, &seen)
+	var err error
+	if mac != "" {
+		err = s.db.QueryRow(`SELECT id, seen_count FROM hosts WHERE mac=?`, mac).Scan(&id, &seen)
+		if err == nil {
+			// Same hardware, possibly a new address: keep the row and its id.
+			if h.OpenPorts == nil {
+				h.OpenPorts = model.StringList{}
+			}
+			if h.Tags == nil {
+				h.Tags = model.StringList{}
+			}
+			_, err = s.db.Exec(`UPDATE hosts SET ip=?, mac=?, hostname=?, vendor=?, kind=?, iface=?, is_local=?, seen_count=?,
+				open_ports=?, tags=?, note=?, last_seen=?, source=? WHERE id=?`,
+				h.IP, mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1, h.OpenPorts, h.Tags, h.Note, now, h.Source, id)
+			h.ID = id
+			h.MAC = mac
+			h.SeenCount = seen + 1
+			h.LastSeen = now
+			return err
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
+
+	err = s.db.QueryRow(`SELECT id, seen_count FROM hosts WHERE ip=?`, h.IP).Scan(&id, &seen)
 	if err == nil {
 		if h.OpenPorts == nil {
 			h.OpenPorts = model.StringList{}
@@ -169,8 +202,9 @@ func (s *Store) UpsertHost(h *model.Host) error {
 		}
 		_, err = s.db.Exec(`UPDATE hosts SET mac=?, hostname=?, vendor=?, kind=?, iface=?, is_local=?, seen_count=?,
 			open_ports=?, tags=?, note=?, last_seen=?, source=? WHERE id=?`,
-			h.MAC, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1, h.OpenPorts, h.Tags, h.Note, now, h.Source, id)
+			mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1, h.OpenPorts, h.Tags, h.Note, now, h.Source, id)
 		h.ID = id
+		h.MAC = mac
 		h.SeenCount = seen + 1
 		h.LastSeen = now
 		return err
@@ -186,12 +220,13 @@ func (s *Store) UpsertHost(h *model.Host) error {
 	}
 	res, err := s.db.Exec(`INSERT INTO hosts(ip, mac, hostname, vendor, kind, iface, is_local, seen_count, open_ports, tags, note, first_seen, last_seen, source)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		h.IP, h.MAC, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), 1, h.OpenPorts, h.Tags, h.Note, now, now, h.Source)
+		h.IP, mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), 1, h.OpenPorts, h.Tags, h.Note, now, now, h.Source)
 	if err != nil {
 		return err
 	}
 	id, _ = res.LastInsertId()
 	h.ID = id
+	h.MAC = mac
 	h.SeenCount = 1
 	h.FirstSeen, h.LastSeen = now, now
 	return nil
@@ -221,6 +256,31 @@ func (s *Store) ListHosts(limit int) ([]model.Host, error) {
 // GetHostByIP finds a host by address.
 func (s *Store) GetHostByIP(ip string) (*model.Host, error) {
 	row := s.db.QueryRow(`SELECT `+hostCols+` FROM hosts WHERE ip=?`, ip)
+	h, err := scanHost(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return h, err
+}
+
+// GetHostByMAC finds a host by hardware address. This is the stable identity a
+// host-bound policy resolves against, because DHCP may move the IP at any time.
+func (s *Store) GetHostByMAC(mac string) (*model.Host, error) {
+	mac = normalizeMAC(mac)
+	if mac == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRow(`SELECT `+hostCols+` FROM hosts WHERE mac=?`, mac)
+	h, err := scanHost(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return h, err
+}
+
+// GetHostByID finds a host by primary key.
+func (s *Store) GetHostByID(id int64) (*model.Host, error) {
+	row := s.db.QueryRow(`SELECT `+hostCols+` FROM hosts WHERE id=?`, id)
 	h, err := scanHost(row)
 	if err == sql.ErrNoRows {
 		return nil, nil

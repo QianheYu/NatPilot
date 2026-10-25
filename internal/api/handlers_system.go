@@ -240,6 +240,132 @@ func classifyHost(ip string, ifaces []netutil.Iface) string {
 	return "peer"
 }
 
+// handleListHostPolicies returns the policies that follow one host.
+func (s *Server) handleListHostPolicies(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	host, err := s.app.Store.GetHostByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	policies, err := s.app.Store.ListPoliciesByHost(host.MAC)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"host":     host,
+		"policies": policies,
+		"total":    len(policies),
+	})
+}
+
+// hostPolicyRequest is the body of POST /api/hosts/{id}/policies. Everything is
+// optional except that the resulting rule set has to mean something, so sane
+// defaults fill the gaps (watch every TCP port unless told otherwise).
+type hostPolicyRequest struct {
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	PortRanges    string   `json:"port_ranges"`
+	ExcludeRanges string   `json:"exclude_ranges"`
+	Protocol      string   `json:"protocol"`
+	AutoAction    string   `json:"auto_action"`
+	AutoAdd       bool     `json:"auto_add"`
+	Tags          []string `json:"tags"`
+	Note          string   `json:"note"`
+	Priority      int      `json:"priority"`
+	Enabled       *bool    `json:"enabled"`
+}
+
+// handleCreateHostPolicy binds a new policy to a host by its MAC address, so the
+// policy keeps applying after DHCP changes the host's IP.
+func (s *Server) handleCreateHostPolicy(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	host, err := s.app.Store.GetHostByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	if strings.TrimSpace(host.MAC) == "" {
+		writeError(w, http.StatusBadRequest,
+			"该主机没有 MAC 地址，无法建立基于 MAC 的监控；请先执行一次主机发现")
+		return
+	}
+
+	var req hostPolicyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	label := host.Hostname
+	if strings.TrimSpace(label) == "" {
+		label = host.IP
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "监控 " + label
+	}
+	action := strings.TrimSpace(req.AutoAction)
+	if action == "" {
+		if req.AutoAdd {
+			action = model.ActionAdd
+		} else {
+			action = model.ActionWatch
+		}
+	}
+
+	p := &model.Policy{
+		Name:          name,
+		Description:   req.Description,
+		Enabled:       true,
+		MatchTarget:   "host",
+		PortRanges:    strings.TrimSpace(req.PortRanges),
+		ExcludeRanges: req.ExcludeRanges,
+		Protocol:      orDefault(strings.TrimSpace(req.Protocol), "any"),
+		AutoAction:    action,
+		AutoAdd:       action == model.ActionAdd || req.AutoAdd,
+		Tags:          model.StringList(req.Tags),
+		Note:          req.Note,
+		Priority:      req.Priority,
+		MAC:           host.MAC,
+	}
+	if req.Enabled != nil {
+		p.Enabled = *req.Enabled
+	}
+
+	newID, err := s.app.Store.CreatePolicy(p)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.audit(r, "host.policy.create", fmt.Sprintf("host #%d (%s) policy #%d", host.ID, host.MAC, newID), "", true)
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": newID, "policy": p})
+}
+
+func orDefault(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
+}
+
 func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {

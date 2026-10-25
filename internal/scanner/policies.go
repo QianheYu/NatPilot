@@ -30,7 +30,7 @@ func (s *Scanner) ApplyPolicies(ctx context.Context, run *model.ScanRun, ports [
 		if p.Ignored {
 			continue
 		}
-		pol := matchPolicy(policies, p)
+		pol := matchPolicy(policies, p, s.hostMAC(p.Host))
 		if pol == nil {
 			continue
 		}
@@ -82,11 +82,52 @@ func (s *Scanner) ApplyPolicies(ctx context.Context, run *model.ScanRun, ports [
 	return applied, nil
 }
 
+// hostPolicyTargets returns the current addresses of every host that has its own
+// policy. Resolving the MAC here (rather than storing the IP on the policy) is
+// what makes host monitoring survive DHCP.
+func (s *Scanner) hostPolicyTargets() []string {
+	pols, err := s.store.EnabledPolicies()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, p := range pols {
+		if p.MAC == "" {
+			continue
+		}
+		h, herr := s.store.GetHostByMAC(p.MAC)
+		if herr != nil || h == nil || strings.TrimSpace(h.IP) == "" {
+			continue
+		}
+		if seen[h.IP] {
+			continue
+		}
+		seen[h.IP] = true
+		out = append(out, h.IP)
+	}
+	return out
+}
+
+// hostMAC resolves the hardware address of a discovered host. Host-bound
+// policies are matched on this instead of the IP, so a DHCP lease change does
+// not silently stop a policy from applying.
+func (s *Scanner) hostMAC(ip string) string {
+	if strings.TrimSpace(ip) == "" {
+		return ""
+	}
+	h, err := s.store.GetHostByIP(ip)
+	if err != nil || h == nil {
+		return ""
+	}
+	return h.MAC
+}
+
 // matchPolicy returns the highest priority policy matching a port.
-func matchPolicy(policies []model.Policy, p *model.DiscoveredPort) *model.Policy {
+func matchPolicy(policies []model.Policy, p *model.DiscoveredPort, hostMAC string) *model.Policy {
 	for i := range policies {
 		pol := &policies[i]
-		if !policyTargetMatches(pol, p) {
+		if !policyTargetMatches(pol, p, hostMAC) {
 			continue
 		}
 		if pol.Protocol != "" && pol.Protocol != "any" && !strings.EqualFold(pol.Protocol, p.Protocol) {
@@ -109,7 +150,12 @@ func matchPolicy(policies []model.Policy, p *model.DiscoveredPort) *model.Policy
 	return nil
 }
 
-func policyTargetMatches(pol *model.Policy, p *model.DiscoveredPort) bool {
+func policyTargetMatches(pol *model.Policy, p *model.DiscoveredPort, hostMAC string) bool {
+	// A host-bound policy only ever applies to that one machine: matching by MAC
+	// keeps it pointed at the device even after DHCP hands out a new address.
+	if pol.MAC != "" {
+		return model.SameMAC(pol.MAC, hostMAC)
+	}
 	kind := pol.MatchTarget
 	if kind == "" || kind == "any" {
 		return true
@@ -308,6 +354,28 @@ func (s *Scanner) runMonitorPass(ctx context.Context) {
 		}
 		if _, err := s.Run(ctx, req); err != nil {
 			logging.Debug("scanner", "auto monitor cidr scan failed", "cidr", cidr, "error", err.Error())
+		}
+	}
+	// Hosts that were given their own policies are monitored by their current
+	// address. The address is looked up through the MAC on every round, so a
+	// host that picked up a new DHCP lease is scanned at its new location
+	// without the user touching the policy.
+	for _, ip := range s.hostPolicyTargets() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		req := Request{
+			Name:        "auto monitor host " + ip,
+			TargetKind:  model.ScanTargetCIDR,
+			TargetRef:   ip + "/32",
+			PortsSpec:   s.cfg.Scanner.DefaultPorts,
+			Trigger:     "auto",
+			ApplyPolicy: true,
+		}
+		if _, err := s.Run(ctx, req); err != nil {
+			logging.Debug("scanner", "auto monitor host scan failed", "host", ip, "error", err.Error())
 		}
 	}
 	s.mu.Lock()

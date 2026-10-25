@@ -126,7 +126,7 @@ func (s *Store) CountScansSince(ts string) (int, error) {
 
 // ---- policies ----
 
-const policyCols = `id, name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at`
+const policyCols = `id, name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at, mac`
 
 func scanPolicy(sc interface{ Scan(...any) error }) (*model.Policy, error) {
 	p := &model.Policy{}
@@ -135,7 +135,7 @@ func scanPolicy(sc interface{ Scan(...any) error }) (*model.Policy, error) {
 	var tags model.StringList
 	err := sc.Scan(&p.ID, &p.Name, &p.Description, &enabled, &p.MatchTarget, &p.PortRanges, &p.ExcludeRanges,
 		&p.Protocol, &p.AutoAction, &autoAdd, &tags, &p.Note, &p.MinPort, &p.MaxPort, &p.RequireName, &p.Priority,
-		&createdAt, &updatedAt)
+		&createdAt, &updatedAt, &p.MAC)
 	if err != nil {
 		return nil, err
 	}
@@ -161,10 +161,10 @@ func (s *Store) CreatePolicy(p *model.Policy) (int64, error) {
 	if p.AutoAction == "" {
 		p.AutoAction = "watch"
 	}
-	res, err := s.db.Exec(`INSERT INTO policies(name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	res, err := s.db.Exec(`INSERT INTO policies(name, description, enabled, match_target, port_ranges, exclude_ranges, protocol, auto_action, auto_add, tags, note, min_port, max_port, require_name, priority, created_at, updated_at, mac)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.Name, p.Description, b2i(p.Enabled), p.MatchTarget, p.PortRanges, p.ExcludeRanges, p.Protocol, p.AutoAction,
-		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, now)
+		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, now, normalizeMAC(p.MAC))
 	if err != nil {
 		return 0, err
 	}
@@ -181,9 +181,9 @@ func (s *Store) UpdatePolicy(p *model.Policy) error {
 	if p.Tags == nil {
 		p.Tags = model.StringList{}
 	}
-	_, err := s.db.Exec(`UPDATE policies SET name=?, description=?, enabled=?, match_target=?, port_ranges=?, exclude_ranges=?, protocol=?, auto_action=?, auto_add=?, tags=?, note=?, min_port=?, max_port=?, require_name=?, priority=?, updated_at=? WHERE id=?`,
+	_, err := s.db.Exec(`UPDATE policies SET name=?, description=?, enabled=?, match_target=?, port_ranges=?, exclude_ranges=?, protocol=?, auto_action=?, auto_add=?, tags=?, note=?, min_port=?, max_port=?, require_name=?, priority=?, updated_at=?, mac=? WHERE id=?`,
 		p.Name, p.Description, b2i(p.Enabled), p.MatchTarget, p.PortRanges, p.ExcludeRanges, p.Protocol, p.AutoAction,
-		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, p.ID)
+		b2i(p.AutoAdd), p.Tags, p.Note, p.MinPort, p.MaxPort, p.RequireName, p.Priority, now, normalizeMAC(p.MAC), p.ID)
 	if err == nil {
 		p.UpdatedAt = now
 	}
@@ -215,7 +215,16 @@ func (s *Store) ListPolicies() ([]model.Policy, error) {
 		}
 		out = append(out, *p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The host lookup runs after the result set is closed: SQLite hands out a
+	// single connection here, so querying while iterating rows would deadlock.
+	rows.Close()
+	for i := range out {
+		s.attachPolicyHost(&out[i])
+	}
+	return out, nil
 }
 
 // EnabledPolicies returns only enabled policies.
@@ -240,6 +249,54 @@ func (s *Store) EnabledPolicies() ([]model.Policy, error) {
 func (s *Store) DeletePolicy(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM policies WHERE id=?`, id)
 	return err
+}
+
+// normalizeMAC canonicalises a hardware address (see model.NormalizeMAC). DHCP
+// makes MAC the only stable host identity, so the comparison must not depend on
+// how the address was spelled by whichever source discovered it.
+func normalizeMAC(mac string) string { return model.NormalizeMAC(mac) }
+
+// attachPolicyHost fills in the current address of a host-bound policy so the UI
+// can show "this policy follows AA:BB:..." together with where that host is now.
+func (s *Store) attachPolicyHost(p *model.Policy) {
+	if p == nil || p.MAC == "" {
+		return
+	}
+	h, err := s.GetHostByMAC(p.MAC)
+	if err != nil || h == nil {
+		return
+	}
+	p.HostIP, p.HostName = h.IP, h.Hostname
+}
+
+// ListPoliciesByHost returns the policies bound to one hardware address.
+func (s *Store) ListPoliciesByHost(mac string) ([]model.Policy, error) {
+	mac = normalizeMAC(mac)
+	if mac == "" {
+		return []model.Policy{}, nil
+	}
+	rows, err := s.db.Query(`SELECT `+policyCols+` FROM policies WHERE mac=? ORDER BY priority DESC, id ASC`, mac)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Policy{}
+	for rows.Next() {
+		p, err := scanPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Close before the host lookups (single SQLite connection, see ListPolicies).
+	rows.Close()
+	for i := range out {
+		s.attachPolicyHost(&out[i])
+	}
+	return out, nil
 }
 
 // ---- schedules ----

@@ -212,8 +212,14 @@ CREATE TABLE IF NOT EXISTS policies (
 	require_name   TEXT NOT NULL DEFAULT '',
 	priority       INTEGER NOT NULL DEFAULT 0,
 	created_at     TEXT,
-	updated_at     TEXT
+	updated_at     TEXT,
+	-- Binds the policy to one host by hardware address. DHCP moves the IP, the
+	-- MAC stays, so host-bound policies resolve their target at match time.
+	mac            TEXT NOT NULL DEFAULT ''
 );
+
+-- Fast lookup of the policies that follow one host.
+CREATE INDEX IF NOT EXISTS ix_policies_mac ON policies(mac);
 
 CREATE TABLE IF NOT EXISTS schedules (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,6 +314,21 @@ var postMigrations = []string{
 	// One mapping record per rule/provider/protocol. Without this, a racing
 	// reconcile could store two rows and later updates would only touch one.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_mappings_rule_provider ON mappings(rule_id, provider_name, protocol)`,
+	// Host-bound policies (keyed by MAC) need a column on an existing database.
+	`ALTER TABLE policies ADD COLUMN mac TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS ix_policies_mac ON policies(mac)`,
+	// A device that moved to a new DHCP lease used to be stored twice. Keep the
+	// most recently seen row per MAC before the address becomes its own identity,
+	// otherwise the unique index below cannot be created.
+	`DELETE FROM hosts WHERE mac <> '' AND id NOT IN (
+		SELECT id FROM (
+			SELECT id, ROW_NUMBER() OVER (PARTITION BY mac ORDER BY COALESCE(last_seen,'') DESC, id DESC) AS rn
+			FROM hosts WHERE mac <> ''
+		) WHERE rn = 1
+	)`,
+	// Identity by hardware address; hosts without one (loopback, virtual) are
+	// left alone by using a partial index.
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_hosts_mac ON hosts(mac) WHERE mac <> ''`,
 }
 
 func isDuplicateColumn(err error) bool {

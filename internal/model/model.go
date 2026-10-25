@@ -161,6 +161,15 @@ type Policy struct {
 	Priority      int        `json:"priority"`
 	CreatedAt     Time       `json:"created_at"`
 	UpdatedAt     Time       `json:"updated_at"`
+
+	// MAC binds this policy to one host. Addresses handed out by DHCP change,
+	// so a host-bound policy is keyed by the hardware address and the IP is
+	// resolved from the hosts table at match time. Empty means a global policy.
+	MAC string `json:"mac,omitempty"`
+
+	// Computed at read time (not persisted): where the bound host currently is.
+	HostIP   string `json:"host_ip,omitempty"`
+	HostName string `json:"host_name,omitempty"`
 }
 
 // Schedule defines recurring execution of a scan or a maintenance task.
