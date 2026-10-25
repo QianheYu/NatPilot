@@ -1,9 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Apply the theme before first paint so a dark-mode user does not get a
+         flash of the light default (and vice versa). Keep the key and the
+         fallback in sync with THEME_KEY / the default in src/store.js: the key
+         is versioned so the new light default is not masked by the "dark" that
+         older builds stored. -->
+    <script>
+      try {
+        document.documentElement.setAttribute(
+          'data-theme',
+          localStorage.getItem('natpilot-theme-v2') || 'light',
+        )
+      } catch (e) {
+        /* storage blocked: the default theme is already on <html> */
+      }
+    </script>
     <title>NatPilot · NAT Port Mapping Console</title>
   </head>
   <body>

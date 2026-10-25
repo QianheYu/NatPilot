@@ -1,9 +1,9 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
-import { store, toastOk, toastErr } from '../store'
+import { store, toastOk, toastErr, bumpEventsRevision } from '../store'
 import { fmtTime } from '../utils/format'
 import { useLive } from '../composables/useLive'
 
@@ -43,9 +43,26 @@ async function markRead() {
   try {
     await api.markEventsRead([])
     toastOk('已全部标记为已读')
-    loadEvents()
+    // The watcher below reloads the list; the topbar bell reacts to the same bump.
+    bumpEventsRevision()
   } catch (err) {
     toastErr(err.message, '操作失败')
+  }
+}
+
+// markOne marks a single event read — the log page used to offer only a
+// bulk action, which made it impossible to clear just the entry you looked at.
+async function markOne(ev) {
+  const key = `read-${ev.id}`
+  if (busy[key]) return
+  busy[key] = true
+  try {
+    await api.markEventsRead([ev.id])
+    bumpEventsRevision()
+  } catch (err) {
+    toastErr(err.message, '操作失败')
+  } finally {
+    busy[key] = false
   }
 }
 
@@ -55,7 +72,7 @@ async function clearAll() {
     const res = await api.clearEvents(0)
     toastOk(`已清空 ${res.deleted} 条日志`)
     liveLog.value = []
-    loadEvents()
+    bumpEventsRevision()
   } catch (err) {
     toastErr(err.message, '清空失败')
   } finally {
@@ -66,6 +83,10 @@ async function clearAll() {
 const levelKind = (l) => ({ info: 'info', warn: 'warn', error: 'danger', debug: 'default' })[l] || 'default'
 
 const liveCount = computed(() => liveLog.value.length)
+
+// Anything that changes the read state — here or in the topbar bell — bumps the
+// shared revision, so both views reload from the server and agree.
+watch(() => store.eventsRevision, loadEvents)
 
 onMounted(loadEvents)
 </script>
@@ -134,7 +155,7 @@ onMounted(loadEvents)
                 <th style="width: 90px">级别</th>
                 <th style="width: 110px">来源</th>
                 <th>内容</th>
-                <th style="width: 60px"></th>
+                <th style="width: 104px">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -150,7 +171,16 @@ onMounted(loadEvents)
                   </details>
                 </td>
                 <td class="right">
-                  <span v-if="!e.read" class="badge accent">未读</span>
+                  <button
+                    v-if="!e.read"
+                    class="btn sm ghost"
+                    :disabled="busy['read-' + e.id]"
+                    title="将这一条标记为已读"
+                    @click="markOne(e)"
+                  >
+                    标为已读
+                  </button>
+                  <span v-else class="mute small">已读</span>
                 </td>
               </tr>
             </tbody>

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api, { setUnauthorizedHandler } from './api'
-import { store, applyTheme, toggleTheme, dismissToast, toastWarn } from './store'
+import { store, applyTheme, toggleTheme, dismissToast, toastWarn, bumpEventsRevision } from './store'
 import { useLive } from './composables/useLive'
 import { useResponsiveTables } from './composables/useResponsiveTables'
 import { visibleModules, flatPages } from './nav'
@@ -128,11 +128,18 @@ async function refreshBadges() {
 async function markAllRead() {
   try {
     await api.markEventsRead([])
+    // Bumping the shared revision refreshes the bell here and the 日志与审计
+    // list at the same time (see the watcher below), so the two stay in sync.
+    bumpEventsRevision()
   } catch {
     /* ignore */
   }
   refreshBadges()
 }
+
+// Any page that marks events read (all or a single one) bumps the revision;
+// the bell and its popover follow immediately.
+watch(() => store.eventsRevision, () => refreshBadges())
 
 async function doLogout() {
   try {
