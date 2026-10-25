@@ -1,0 +1,49 @@
+# Compose deployment — portable default (bridge networking + published port).
+#
+# This variant works on every Docker host, including Docker Desktop for Windows
+# and macOS, where `network_mode: host` is not supported at all.
+#
+#   cp .env.example .env      # set NATPILOT_ADMIN_PASSWORD first
+#   docker compose up -d --build
+#   open http://localhost:8787
+#
+# Caveat: inside a bridge network the container only sees the Docker bridge, so
+# router discovery (SSDP) and PCP/NAT-PMP cannot reach the real LAN. The UI, the
+# API, scanning of the container itself and mapping of the container's own ports
+# all work; mapping the *host* requires host networking.
+#
+# On Linux, use the host-network variant instead:
+#
+#   docker compose -f docker-compose.hostnet.yml up -d --build
+
+services:
+  natpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "0.1.0"
+    image: natpilot:latest
+    container_name: natpilot
+    restart: unless-stopped
+    ports:
+      - "${NATPILOT_PORT:-8787}:8787"
+    environment:
+      NATPILOT_DATA_DIR: /var/lib/natpilot
+      NATPILOT_HOST: 0.0.0.0
+      NATPILOT_PORT: "8787"
+      NATPILOT_SERVER: "1"
+      NATPILOT_AUTH: "true"
+      NATPILOT_ADMIN_USER: ${NATPILOT_ADMIN_USER:-admin}
+      NATPILOT_ADMIN_PASSWORD: ${NATPILOT_ADMIN_PASSWORD:-changeme-please}
+      NATPILOT_LOG_LEVEL: ${NATPILOT_LOG_LEVEL:-info}
+    volumes:
+      - natpilot-data:/var/lib/natpilot
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  natpilot-data:

@@ -1,0 +1,15 @@
+# Keep the build context small: never ship VCS data, build outputs or local state.
+.git
+.gitignore
+bin/
+dist/
+data/
+data-*/
+.gocache/
+frontend/node_modules/
+internal/webui/dist/
+*.db
+*.db-wal
+*.db-shm
+.env
+README.md

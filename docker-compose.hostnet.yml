@@ -1,0 +1,43 @@
+# Compose deployment — host networking (Linux only).
+#
+# Use this when natpilot must manage the *host's* WAN mappings: with host
+# networking the container shares the host's network namespace, so SSDP,
+# PCP and NAT-PMP reach the real router.
+#
+#   cp .env.example .env
+#   docker compose -f docker-compose.hostnet.yml up -d --build
+#
+# This file is intentionally standalone (not an override) because Compose cannot
+# remove a published port from an override file, and `network_mode: host` is
+# rejected by Docker Desktop on Windows/macOS.
+
+services:
+  natpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "0.1.0"
+    image: natpilot:latest
+    container_name: natpilot
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      NATPILOT_DATA_DIR: /var/lib/natpilot
+      NATPILOT_HOST: 0.0.0.0
+      NATPILOT_PORT: "8787"
+      NATPILOT_SERVER: "1"
+      NATPILOT_AUTH: "true"
+      NATPILOT_ADMIN_USER: ${NATPILOT_ADMIN_USER:-admin}
+      NATPILOT_ADMIN_PASSWORD: ${NATPILOT_ADMIN_PASSWORD:-changeme-please}
+      NATPILOT_LOG_LEVEL: ${NATPILOT_LOG_LEVEL:-info}
+    volumes:
+      - natpilot-data:/var/lib/natpilot
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  natpilot-data:

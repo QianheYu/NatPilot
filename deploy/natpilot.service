@@ -1,0 +1,49 @@
+# /etc/systemd/system/natpilot.service
+# Deploy:
+#   sudo useradd -r -s /usr/sbin/nologin natpilot
+#   sudo mkdir -p /var/lib/natpilot && sudo chown natpilot:natpilot /var/lib/natpilot
+#   sudo install -m 0755 bin/natpilot /usr/local/bin/natpilot
+#   sudo cp deploy/natpilot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now natpilot
+#
+# Note: NAT port mapping must be requested from the host that owns the WAN
+# address. Run this unit on the machine whose IP the router NATs.
+
+[Unit]
+Description=NatPilot NAT port mapping console
+Documentation=https://github.com/ekko-studio/natpilot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=natpilot
+Group=natpilot
+WorkingDirectory=/var/lib/natpilot
+
+Environment=NATPILOT_DATA_DIR=/var/lib/natpilot
+Environment=NATPILOT_AUTH=true
+Environment=NATPILOT_LOG_LEVEL=info
+Environment=NATPILOT_LOG_FORMAT=text
+# Set the initial administrator password before the first start, then unset it:
+# Environment=NATPILOT_ADMIN_PASSWORD=change-me-now
+
+ExecStart=/usr/local/bin/natpilot --config /etc/natpilot/config.yaml \
+  --host 127.0.0.1 --port 8787 serve
+
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+# Hardening (kept permissive enough for port scanning / raw sockets).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/natpilot
+# Uncomment when running on a privileged port or when PCP/NAT-PMP needs raw access.
+# AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+# CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

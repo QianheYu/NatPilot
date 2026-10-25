@@ -1,0 +1,75 @@
+# Sample NatPilot configuration.
+# Every value can be overridden by NATPILOT_* environment variables, CLI flags
+# or settings saved from the web console (persisted in SQLite).
+# Generate a fresh copy with: natpilot config init ./natpilot.yaml
+
+app:
+  name: natpilot
+  data_dir: /var/lib/natpilot
+  auto_migrate: true
+
+http:
+  enabled: true
+  host: 0.0.0.0
+  port: 8787
+  mode: auto            # auto | web | server | desktop
+  base_path: /
+  trust_proxy: false
+  cors_origins: []      # e.g. ["http://localhost:5173"] during frontend dev
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+
+database:
+  driver: sqlite
+  path: /var/lib/natpilot/natpilot.db
+  wal: true
+  busy_timeout_ms: 5000
+
+scanner:
+  max_concurrency: 512
+  timeout_ms: 800
+  max_ports_per_scan: 65535
+  max_hosts_per_scan: 1024
+  default_ports: "1-1024,3000,3306,5000,5432,6379,8000-8100,8080,8443,9000,9090,27017,32400"
+  grab_banners: true
+  enable_lan_scan: true
+  # Manual vs automatic monitoring are independent switches:
+  auto_monitor_local: false     # start the auto monitor with the service
+  auto_scan_cidr: []            # e.g. ["192.168.1.0/24"]
+  auto_interval_seconds: 300
+  auto_apply_policy: true
+  auto_add_open: false
+  auto_add_ports: ""
+
+mapper:
+  enabled: true
+  dry_run: false                # true = record only, never touch the gateway
+  # Protocol preference, newest first; legacy protocols act as fallback.
+  protocols: [igd2, igd1, pcp, natpmp]
+  discover_interval_seconds: 300
+  reconcile_interval_seconds: 60
+  renew_seconds_before_expiry: 120
+  default_lease_seconds: 86400
+  max_lease_seconds: 604800
+  cleanup_deleted_rules: true   # remove gateway mappings of deleted rules
+  conflict_policy: skip         # skip | error
+  external_ip_check: true
+  allow_external_port_range: true
+
+auth:
+  enabled: false                # ignored in desktop mode (always no-login)
+  require_for_web: true
+  bootstrap_user: admin
+  bootstrap_name: Administrator
+  session_ttl_hours: 72
+  token_ttl_hours: 720
+  lockout_attempts: 8
+  lockout_minutes: 15
+
+log:
+  level: info                   # debug | info | warn | error
+  format: text                  # text | json
+  max_entries: 5000
+  retention_days: 30

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NatPilot — 前端尚未构建 / frontend not built</title>
+<style>
+  :root { color-scheme: dark light; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    font: 15px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
+    background: #0f1115; color: #e6e9ef;
+  }
+  .card {
+    max-width: 640px; padding: 36px 40px; border-radius: 14px;
+    background: #171a21; border: 1px solid #262b36;
+    box-shadow: 0 18px 50px rgba(0,0,0,.45);
+  }
+  h1 { margin: 0 0 6px; font-size: 20px; letter-spacing: .2px; }
+  p.sub { margin: 0 0 22px; color: #8f98a8; font-size: 13px; }
+  ol { margin: 0; padding-left: 20px; }
+  li { margin: 8px 0; }
+  code, pre {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    background: #0b0d12; border: 1px solid #232833; border-radius: 7px;
+  }
+  code { padding: 1px 6px; font-size: 13px; }
+  pre { padding: 12px 14px; overflow-x: auto; font-size: 12.5px; margin: 10px 0 0; }
+  .api { margin-top: 24px; padding-top: 18px; border-top: 1px solid #232833; color: #8f98a8; font-size: 13px; }
+  a { color: #6aa8ff; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <h1>前端资源尚未构建</h1>
+    <p class="sub">Frontend bundle is not embedded in this binary yet.</p>
+    <ol>
+      <li>构建控制台（需要 Node.js ≥ 18）：<pre>make frontend      # 或: cd frontend &amp;&amp; npm install &amp;&amp; npm run build</pre></li>
+      <li>重新编译二进制：<pre>make build         # 或: go build -o bin/natpilot .</pre></li>
+    </ol>
+    <div class="api">
+      REST API 已经可用：<a href="/api/health">GET /api/health</a> ·
+      <a href="/api/meta">GET /api/meta</a>
+    </div>
+  </main>
+</body>
+</html>

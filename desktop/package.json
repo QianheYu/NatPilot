@@ -1,0 +1,59 @@
+{
+  "name": "natpilot-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NatPilot desktop edition: native window plus a tray-resident shell (closing the window keeps the server running; quit from the tray menu).",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "icons": "node electron/assets/make-icons.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.natpilot.desktop",
+    "productName": "NatPilot",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../bin/",
+        "to": "bin/",
+        "filter": ["natpilot", "natpilot.exe"]
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "NatPilot"
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": ["dmg", "zip"],
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Network",
+      "icon": "build/icon.png"
+    }
+  }
+}

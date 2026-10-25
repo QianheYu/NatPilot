@@ -1,0 +1,29 @@
+# Keep line endings stable across platforms: git normalises to LF in the object
+# database, and every source/script file is checked out as LF so that gofmt and
+# the linters see exactly what CI sees. Only PowerShell scripts keep CRLF, which
+# is what Windows tooling expects.
+* text=auto
+
+*.go      text eol=lf
+*.js      text eol=lf
+*.mjs     text eol=lf
+*.cjs     text eol=lf
+*.vue     text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+*.json    text eol=lf
+*.jsonc   text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.sh      text eol=lf
+Makefile  text eol=lf
+Dockerfile text eol=lf
+
+*.ps1     text eol=crlf
+
+# Binary assets are never converted.
+*.png     binary
+*.ico     binary
+*.icns    binary
+*.exe     binary
