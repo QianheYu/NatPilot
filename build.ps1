@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 
 # NatPilot build helper for Windows (PowerShell equivalent of build.sh).
 #
-#   .\build.ps1                 frontend + native binaries (server + launcher)
+#   .\build.ps1                 frontend + native server binary
 #   .\build.ps1 -All            ready-to-run bundles for all six Go targets
 #   .\build.ps1 -Electron       package the tray-resident Electron desktop app
 #   .\build.ps1 -FrontendOnly   rebuild the SPA only
@@ -61,8 +61,6 @@ function Build-Native {
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "bin") | Out-Null
     go build -trimpath -ldflags $ldflags -o "bin/natpilot.exe" .
     if ($LASTEXITCODE -ne 0) { throw "go build (server) failed" }
-    go build -trimpath -ldflags "$ldflags -H windowsgui" -o "bin/natpilot-desktop.exe" ./cmd/desktop
-    if ($LASTEXITCODE -ne 0) { throw "go build (launcher) failed" }
     Get-ChildItem (Join-Path $Root "bin") | Format-Table Name, Length
 }
 
@@ -78,10 +76,6 @@ function Build-All {
         $env:GOARCH = $t.Arch
         go build -trimpath -ldflags $ldflags -o (Join-Path $out "natpilot$($t.Ext)") .
         if ($LASTEXITCODE -ne 0) { throw "go build failed for $($t.OS)/$($t.Arch)" }
-        # The desktop shell must not pop a console window; only Windows links that way.
-        $dflags = if ($t.OS -eq "windows") { "-H windowsgui" } else { "" }
-        go build -trimpath -ldflags "$ldflags $dflags" -o (Join-Path $out "natpilot-desktop$($t.Ext)") ./cmd/desktop
-        if ($LASTEXITCODE -ne 0) { throw "go build (launcher) failed for $($t.OS)/$($t.Arch)" }
     }
     Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
     Write-Host ""

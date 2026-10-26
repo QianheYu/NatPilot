@@ -9,12 +9,11 @@
 # cross-compiles from any host without a cross toolchain.
 #
 # --all produces one self-contained directory per target, which is what should
-# be handed to users: the desktop shell looks for the server binary next to
+# be handed to users: the Electron shell looks for the server binary next to
 # itself, so a bundle always works with no arguments.
 #
 #   dist/windows-amd64/
 #     natpilot.exe            server + web UI (also usable on its own)
-#     natpilot-desktop.exe    desktop shell (launches the server above)
 set -eu
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -36,7 +35,6 @@ build_native() {
   echo "==> building native binaries"
   mkdir -p "$ROOT/bin"
   ( cd "$ROOT" && go build -trimpath -ldflags "$LDFLAGS" -o bin/natpilot . )
-  ( cd "$ROOT" && go build -trimpath -ldflags "$LDFLAGS" -o bin/natpilot-desktop ./cmd/desktop )
   ls -lh "$ROOT/bin"
 }
 
@@ -48,20 +46,15 @@ build_all() {
     GOARCH="${target##*/}"
     ext=""
     [ "$GOOS" = "windows" ] && ext=".exe"
-    # The desktop shell must not pop a console window on Windows, so it is linked
-    # as a GUI-subsystem binary; other platforms have no equivalent flag.
-    dflags=""
-    [ "$GOOS" = "windows" ] && dflags="-H windowsgui"
+
     out="$ROOT/dist/${GOOS}-${GOARCH}"
     mkdir -p "$out"
     echo "    -> dist/${GOOS}-${GOARCH}/"
-    # Plain names on purpose: the desktop shell resolves "natpilot[.exe]"
-    # alongside itself, so a bundle runs with no arguments.
+    # Plain name on purpose: the Electron shell and docker images expect
+    # "natpilot[.exe]", so a bundle runs with no arguments.
     ( cd "$ROOT" && GOOS="$GOOS" GOARCH="$GOARCH" \
         go build -trimpath -ldflags "$LDFLAGS" -o "$out/natpilot${ext}" . )
-    ( cd "$ROOT" && GOOS="$GOOS" GOARCH="$GOARCH" \
-        go build -trimpath -ldflags "$LDFLAGS $dflags" -o "$out/natpilot-desktop${ext}" ./cmd/desktop )
-  done
+      done
   echo
   echo "==> bundles"
   for target in $TARGETS; do

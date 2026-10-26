@@ -255,12 +255,12 @@ natpilot gateway discover
 
 曾经在 `cmd/desktop` 里实现过一套 Windows 原生托盘（`Shell_NotifyIconW` + 隐藏窗口 + 消息循环），
 但那只覆盖一个平台，与「桌面版三平台行为一致」的目标冲突，也会让同一功能出现两套实现与两套 bug。
-**最终方案：托盘能力只由 Electron 提供**，Go 侧只保留一个无托盘的轻量启动器。
+**最终方案：托盘能力只由 Electron 提供**，Go 侧不再发布任何启动器或托盘实现。
 
 | 形态 | 定位 | 托盘 |
 | --- | --- | --- |
 | `desktop/`（Electron） | **桌面版**，推荐 | ✅ Windows / macOS / Linux 同一套实现 |
-| `natpilot-desktop`（Go 单文件） | 可选启动器（不想装 Electron 时） | ❌ 前台运行，`Ctrl+C` 退出 |
+
 | `natpilot serve` | 服务端 / Docker | —（systemd 或容器托管） |
 
 ### 8.1 目标行为（Electron）
@@ -301,8 +301,9 @@ Electron 自带这三套实现，因此托盘只在 Electron 里做；Go 壳保�
 已验证（本机 Windows）：
 
 - `node --check desktop/electron/main.js` 通过；`npm run icons` 能重新生成 4 个托盘图与 512×512 应用图标；
-- Go 侧：`natpilot-desktop --no-open` 前台启动、`Ctrl+C` 退出、子进程随之结束；Linux 下由
-  `Pdeathsig=SIGTERM`、Windows 下由 Job Object 保证不残留孤儿。
+- Go 侧：`natpilot serve` 由 systemd / 容器托管；Electron 退出时其服务端子进程由
+  Linux 的 `Pdeathsig=SIGTERM`、Windows 的 Job Object 保证不残留孤儿
+  （原先的 Go 启动器已移除，其历史问题记录见本节上文）。
 
 未验证（本环境限制）：
 

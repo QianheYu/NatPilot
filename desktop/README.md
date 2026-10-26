@@ -149,8 +149,6 @@ make desktop            # macOS / Linux
 
 macOS 的 `NSStatusItem` 需要 Objective-C 运行时，Linux 的系统托盘需要 StatusNotifierItem（D-Bus）或 GTK——
 两条路都绕不开 cgo 或自研协议栈，会破坏「`CGO_ENABLED=0` + 任意机器交叉编译」的约束。
-Electron 自带这三种平台的托盘实现，因此桌面版统一走 Electron；Go 侧只保留
-`natpilot-desktop` 这个**轻量启动器**（无托盘、前台运行、Ctrl+C 退出），供不想装 Electron 的场景使用。
-
-> 想要「窗口 + 常驻托盘 + 关闭不退出 + 托盘里退出」的完整体验，请用 `desktop/` 里的 Electron 版；
-> `natpilot-desktop.exe` 只是开浏览器的最小启动器，它没有窗口也没有托盘。
+Electron 自带这三种平台的托盘实现，因此桌面版统一走 Electron。
+Go 侧不再发布单独的启动器：需要窗口与托盘就用 Electron 版，服务器环境直接
+`natpilot serve` + 浏览器。

@@ -119,33 +119,31 @@
 
 构建矩阵（`make cross` / `./build.sh --all` / `.\build.ps1 -All` 会为每个目标产出一个**开箱即用目录**）：
 
-| 目标 | 服务端 / Web | 桌面 GUI |
-| --- | --- | --- |
-| linux/amd64 · linux/arm64 | ✅ | ✅ |
-| darwin/amd64 · darwin/arm64 | ✅ | ✅ |
-| windows/amd64 · windows/arm64 | ✅ | ✅ |
+| 目标 | 服务端 / Web |
+| --- | --- |
+| linux/amd64 · linux/arm64 | ✅ |
+| darwin/amd64 · darwin/arm64 | ✅ |
+| windows/amd64 · windows/arm64 | ✅ |
+
+> 桌面版（窗口 + 系统托盘）由 `desktop/` 的 Electron 应用单独打包，**只能为本机平台出包**
+> （跨平台打包需要对应平台的工具链），因此不在上面的 Go 构建矩阵里。
 
 产物结构如下，每个目录都是一个完整可运行的分发包：
 
 ```
 dist/windows-amd64/
-  natpilot.exe           服务端 + 内嵌 Web 控制台（也可单独使用）
-  natpilot-desktop.exe   桌面壳（会自动拉起同目录的 natpilot.exe 并开窗）
+  natpilot.exe           服务端 + 内嵌 Web 控制台
 dist/linux-arm64/
   natpilot
-  natpilot-desktop
 ```
 
-> 桌面壳本身只负责开窗，**它需要同目录下存在服务端二进制**才能工作。
-> 因此请把整个目录一起分发；若只想发一个文件，请发服务端 `natpilot`，
-> 它自带完整的 Web 控制台，浏览器访问即可。
+> 每个目录里只有一个二进制，单独拷走即可运行，它自带完整的 Web 控制台。
+> 想要**窗口 + 系统托盘**体验请用下文单独打包的 Electron 桌面版。
 
 ### 桌面版：窗口 + 系统托盘（推荐）
 
-`natpilot-desktop` 是**不开窗的轻量启动器**：它选一个空闲端口、拉起服务端，然后用系统浏览器打开控制台。
-
-想要「独立窗口 + 常驻系统托盘 + 关闭窗口不退出 + 在托盘菜单里退出 + 直接在窗口里改运行配置」，
-请用 `desktop/` 下的 Electron 桌面版（Windows / macOS / Linux 同一套实现）：
+桌面能力只由 `desktop/` 下的 Electron 应用提供（Windows / macOS / Linux 同一套实现），
+Go 侧只发布服务端：需要窗口与托盘就用 Electron 版，服务器环境直接 `natpilot serve` + 浏览器。
 
 ```
 desktop/release/win-unpacked/
@@ -210,8 +208,7 @@ make cross          # 产物在 dist/
 
 ```bash
 NATPILOT_DESKTOP=1 ./bin/natpilot --host 127.0.0.1 --port 8787 serve
-# 或使用内置的桌面壳（自动选端口、自动开窗口）
-./bin/natpilot-desktop
+# 端口写 0 则让系统自动分配，serve 会打印实际监听地址
 ```
 
 ---
@@ -380,26 +377,12 @@ npm run dist:linux    # release/NatPilot-x.y.z.AppImage / .deb
 
 详见 [`desktop/README.md`](desktop/README.md)。
 
-#### 轻量启动器（可选，无托盘）
+#### 不想装 Electron 时
 
-不想装 Electron 时，可以用单文件启动器：它在前台运行，拉起服务并打开系统浏览器，`Ctrl+C` 退出。
-
-```bash
-./build.sh                 # 生成 bin/natpilot 与 bin/natpilot-desktop
-./bin/natpilot-desktop     # 自动选端口、拉起服务、打开浏览器
-```
-
-它按以下顺序寻找服务端二进制，**通常无需任何参数**：
-
-1. `--server` 指定的路径；
-2. 与启动器同目录的 `natpilot[.exe]`（也接受 `natpilot-<os>-<arch>[.exe]`、`natpilot-server[.exe]`）；
-3. 同目录下 `bin/` 子目录中的同名文件；
-4. 最后才回退到 `PATH` 查找。
+直接用服务端即可：它自带完整的 Web 控制台，浏览器访问就是同一套界面（桌面模式下免登录）。
 
 ```bash
-# 服务端不在同目录时显式指定
-natpilot-desktop --server /path/to/natpilot      # Linux / macOS
-natpilot-desktop.exe --server .\natpilot.exe     # Windows
+./bin/natpilot --host 127.0.0.1 --port 8787 serve   # 然后浏览器打开 http://127.0.0.1:8787
 ```
 
 > 为什么托盘只在 Electron 里做：macOS 的 `NSStatusItem` 需要 Objective-C 运行时，Linux 的系统托盘需要
@@ -710,10 +693,9 @@ cd frontend && npm install --include=dev && npm run dev
 **Q：规则显示「失败 / 无可用网关」？**
 表示规则已入库但未能下发；检查网关可用性、路由器是否允许该端口、以及是否为演练模式（`mapper.dry_run`）。失败原因在列表中可见。
 
-**Q：Windows 上运行 `natpilot-desktop.exe` 报 `natpilot: executable file not found in %PATH%`？**
-桌面壳没有找到服务端二进制。请确认 `natpilot.exe` 与 `natpilot-desktop.exe` 在**同一个目录**，
-或显式指定：`natpilot-desktop.exe --server .\natpilot.exe`。
-报错信息会列出所有已查找的路径，按提示放置即可。
+**Q：Electron 版提示「无法启动 NatPilot 服务」？**
+说明它没找到或无法执行内置的服务端。安装包会把服务端放在 `resources/bin/` 下；
+若是解压出来的免安装目录，请确认整个目录（含 `resources`、`.dll`）被完整拷贝，不要只拷 `NatPilot.exe`。
 
 **Q：忘记管理员密码？**
 ```bash

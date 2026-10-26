@@ -36,7 +36,6 @@ frontend:
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) .
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-desktop ./cmd/desktop
 
 # Package the tray-resident desktop edition (Electron). Requires Node.js and,
 # on first run, network access for the electron/electron-builder downloads.
@@ -45,7 +44,7 @@ desktop: build
 	cd desktop && npm install --no-audit --no-fund && npm run dist
 
 # Build one self-contained directory per target. Each bundle holds the server
-# and the launcher under their plain names, so the launcher finds the server
+# under their plain names, which is what the Electron shell and docker images expect
 # next to itself and runs with no arguments.
 cross: frontend
 	@rm -rf dist
@@ -55,7 +54,6 @@ cross: frontend
 	  out=dist/$$os-$$arch; mkdir -p $$out; \
 	  echo "  -> $$out/"; \
 	  GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "$(LDFLAGS)" -o $$out/$(BINARY)$$ext . || exit 1; \
-	  GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "$(LDFLAGS)" -o $$out/$(BINARY)-desktop$$ext ./cmd/desktop || exit 1; \
 	done
 	@echo "==> bundles"; @ls -1 dist
 
