@@ -1,21 +1,18 @@
-// 端口发现 / 映射规则 的「按主机分组」支持。
+// 「端口发现」/「映射规则」的树形分组：网段 → 主机 → 端口行（→ 行内详情）。
 //
-// 分组键的选择（这是本文件的核心决定）：
+// 两处可折叠层级：
+//   一级 网段（IPv4 取 /24；127.x 归「本机回环」；其它/主机名归「未识别网段」）
+//   二级 主机（优先 MAC，解析不到退化为 IP —— 见 hostKeyFor 的说明）
+// 第三层就是原来的数据行，行内可再展开详情（由页面自己维护展开集合）。
 //
-//   * 规则与端口记录里只存 IP（rule.host / port.host），IP 会随 DHCP 变化；
-//   * hosts 表以 MAC 为身份（ux_hosts_mac），端口↔策略的绑定也走 MAC；
-//   * 所以能用 IP 解析出所属主机的 MAC 时，就以 `mac:...` 作键 —— 同一台设备
-//     换地址后仍留在同一组；
-//   * 解析不到（远程主机、尚未发现、已被清理）就退化为 `ip:...`，否则条目
-//     会从界面上消失，这是不可接受的。
-//
-// 组标题同时展示主机名、MAC 与当前 IP：组本身是稳定的，组内 IP 会随实际
-// 情况更新。
+// 为什么二级键优先 MAC：规则与端口记录里只存 IP，而 IP 会随 DHCP 变化；hosts 表
+// 以 MAC 为身份，端口↔策略绑定也走 MAC。所以能从 /api/hosts 解析出该 IP 当前所属
+// 主机的 MAC 时就用 mac:<mac> 作键 —— 设备换地址后仍留在同一台主机下，标题里的
+// 「当前 IP」跟着更新；解析不到则退化为 ip:<ip>，否则这些行会从界面上消失。
 
 const GROUP_PREF_KEY = 'natpilot-group-by-host'
-const COLLAPSED_PREF_KEY = 'natpilot-collapsed-hosts'
+const COLLAPSED_PREFIX = 'natpilot-collapsed-'
 
-// normMAC 与后端 model.NormalizeMAC 保持一致。
 export function normMAC(mac) {
   const hex = String(mac || '')
     .toLowerCase()
@@ -32,62 +29,112 @@ export function buildHostIndex(hosts) {
   return index
 }
 
-// hostKeyFor returns the grouping key for one row.
+// hostKeyFor returns the level-2 key for one row.
 export function hostKeyFor(ip, index) {
   const host = index && index.get(String(ip || ''))
   const mac = host ? normMAC(host.mac) : ''
   return mac ? `mac:${mac}` : `ip:${ip || '?'}`
 }
 
-// groupByHost groups rows by host key, keeping the order of first appearance
-// for groups and sorting rows inside a group by port.
-export function groupByHost(items, index, getIP, getPort) {
-  const groups = new Map()
+// subnetKey derives the level-1 grouping for one address.
+export function subnetOf(ip) {
+  const addr = String(ip || '').trim()
+  if (/^127\./.test(addr)) return { key: 'loopback', label: '本机回环 (127.0.0.0/8)', rank: 0 }
+  const m = addr.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/)
+  if (m) {
+    const cidr = `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}.0/24`
+    return { key: `net:${cidr}`, label: cidr, rank: 1 }
+  }
+  if (!addr) return { key: 'unknown', label: '未识别网段', rank: 9 }
+  // IPv6 or a hostname: no subnet we can compute, keep it in one bucket.
+  return { key: 'other', label: '其它主机', rank: 8 }
+}
+
+// groupBySubnet builds the two-level tree from a flat row list.
+export function groupBySubnet(items, index, getIP, getPort) {
+  const nets = new Map()
   for (const item of items || []) {
     const ip = getIP(item)
-    const key = hostKeyFor(ip, index)
-    let g = groups.get(key)
-    if (!g) {
-      const host = index && index.get(String(ip || ''))
-      g = {
-        key,
+    const subnet = subnetOf(ip)
+    const hostKey = hostKeyFor(ip, index)
+
+    let net = nets.get(subnet.key)
+    if (!net) {
+      net = { key: subnet.key, label: subnet.label, rank: subnet.rank, hosts: new Map(), count: 0 }
+      nets.set(subnet.key, net)
+    }
+    let host = net.hosts.get(hostKey)
+    if (!host) {
+      const record = index && index.get(String(ip || ''))
+      host = {
+        key: hostKey,
         ip: ip || '?',
         ips: new Set(),
-        mac: host ? host.mac || '' : '',
-        hostname: host ? host.hostname || '' : '',
-        vendor: host ? host.vendor || '' : '',
+        mac: record ? record.mac || '' : '',
+        hostname: record ? record.hostname || '' : '',
+        vendor: record ? record.vendor || '' : '',
         items: [],
       }
-      groups.set(key, g)
+      net.hosts.set(hostKey, host)
     }
-    g.ips.add(ip || '?')
-    g.items.push(item)
+    host.ips.add(ip || '?')
+    host.items.push(item)
+    net.count++
   }
-  const out = [...groups.values()]
-  for (const g of out) {
-    g.items.sort((a, b) => {
-      const pa = Number(getPort(a)) || 0
-      const pb = Number(getPort(b)) || 0
-      if (pa !== pb) return pa - pb
-      return String(getIP(a)).localeCompare(String(getIP(b)))
+
+  const out = [...nets.values()].map((net) => {
+    const hosts = [...net.hosts.values()]
+    for (const h of hosts) {
+      h.items.sort((a, b) => {
+        const pa = Number(getPort(a)) || 0
+        const pb = Number(getPort(b)) || 0
+        return pa !== pb ? pa - pb : String(getIP(a)).localeCompare(String(getIP(b)))
+      })
+      h.ipList = [...h.ips].sort()
+      h.title = h.hostname || h.vendor || h.mac || h.ipList[0]
+      h.subtitle = h.mac && h.ipList.length ? h.ipList.join(', ') : ''
+    }
+    // Bigger hosts first, then by title.
+    hosts.sort((a, b) => {
+      if (b.items.length !== a.items.length) return b.items.length - a.items.length
+      return String(a.title).localeCompare(String(b.title))
     })
-    // A group is either one device (MAC known, address may change) or a single
-    // address that could not be resolved to a device.
-    g.ipList = [...g.ips].sort()
-    g.title = g.hostname || g.vendor || g.mac || g.ipList[0]
-    g.subtitle = g.mac && g.ipList.length ? g.ipList.join(', ') : ''
-  }
-  // Bigger groups first, then by title for a stable order.
+    return { ...net, hosts }
+  })
+
   out.sort((a, b) => {
-    if (b.items.length !== a.items.length) return b.items.length - a.items.length
-    return String(a.title).localeCompare(String(b.title))
+    if (a.rank !== b.rank) return a.rank - b.rank
+    if (b.count !== a.count) return b.count - a.count
+    return a.label.localeCompare(b.label)
   })
   return out
 }
 
-// useHostGroups provides the persisted "group by host" toggle plus the set of
-// collapsed group keys. Both live in localStorage so the choice survives reloads
-// and is shared by the two pages that use it.
+// rowsForTree flattens the tree into the rows the table renders. A level whose
+// key is in the corresponding collapsed set hides everything below it.
+export function rowsForTree(tree, collapsedSubnets, collapsedHosts) {
+  const out = []
+  for (const subnet of tree || []) {
+    out.push({ type: 'subnet', subnet })
+    if (collapsedSubnets.has(subnet.key)) continue
+    for (const host of subnet.hosts) {
+      out.push({ type: 'host', host, subnet })
+      if (collapsedHosts.has(host.key)) continue
+      for (const item of host.items) out.push({ type: 'row', item, host, subnet })
+    }
+  }
+  return out
+}
+
+// rowKey is the v-for key for a flattened row.
+export function rowKey(row) {
+  if (row.type === 'subnet') return `s-${row.subnet.key}`
+  if (row.type === 'host') return `h-${row.host.key}`
+  return `r-${row.item.id}`
+}
+
+// ---- persistence -----------------------------------------------------------
+
 export function readGroupPref() {
   try {
     return localStorage.getItem(GROUP_PREF_KEY) !== '0'
@@ -104,9 +151,10 @@ export function writeGroupPref(on) {
   }
 }
 
-export function readCollapsed() {
+// readCollapsed loads the collapsed-key set for one level ('subnet' | 'host').
+export function readCollapsed(level) {
   try {
-    const raw = localStorage.getItem(COLLAPSED_PREF_KEY)
+    const raw = localStorage.getItem(COLLAPSED_PREFIX + level)
     const list = raw ? JSON.parse(raw) : []
     return new Set(Array.isArray(list) ? list : [])
   } catch {
@@ -114,23 +162,10 @@ export function readCollapsed() {
   }
 }
 
-export function writeCollapsed(set) {
+export function writeCollapsed(level, set) {
   try {
-    localStorage.setItem(COLLAPSED_PREF_KEY, JSON.stringify([...set].slice(0, 500)))
+    localStorage.setItem(COLLAPSED_PREFIX + level, JSON.stringify([...set].slice(0, 800)))
   } catch {
     /* ignore */
   }
-}
-
-// rowsFor flattens groups into the row list the table renders: a `group` entry
-// followed by its rows unless the group is collapsed.
-export function rowsFor(groups, collapsed) {
-  const out = []
-  for (const g of groups) {
-    out.push({ type: 'group', group: g })
-    if (!collapsed.has(g.key)) {
-      for (const item of g.items) out.push({ type: 'row', item, group: g })
-    }
-  }
-  return out
 }

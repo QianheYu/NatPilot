@@ -541,16 +541,13 @@ pre,
   }
 }
 
-/* ------------------------------------------ 11. host grouping rows (tables) */
+/* ------------------------------- 11. tree rows (subnet → host → port + detail) */
 
-/* 端口发现 / 映射规则 的「按主机分组」表头行。点击整行折叠或展开该主机。 */
+/* 端口发现 / 映射规则 的树形表：一级网段、二级主机，两级都可点击收起。 */
 tr.group-row > td {
-  background: var(--bg-hover);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  padding: 8px 12px !important;
   cursor: pointer;
   user-select: none;
+  border-top: 1px solid var(--border);
 }
 
 tr.group-row:hover > td {
@@ -580,7 +577,64 @@ tr.group-row .g-summary {
   margin-left: 8px;
 }
 
-/* 卡片化布局下，分组表头自身不能变成一张卡片：它是卡片的标题条。 */
+/* 一级：网段 —— 更重的底色与字号，作为层级的骨架 */
+tr.subnet-row > td {
+  background: var(--bg-hover);
+  padding: 9px 12px !important;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+}
+
+/* 二级：主机 —— 缩进一级，底色与普通行区分 */
+tr.host-row > td {
+  background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+  padding: 7px 12px 7px 26px !important;
+  font-size: 12px;
+  border-top: 0;
+}
+
+tr.host-row .g-title {
+  font-weight: 600;
+}
+
+/* 三级：数据行 —— 再缩进一级，与主机行形成视觉层级 */
+tr.data-row > td:first-child {
+  padding-left: 34px;
+}
+
+/* 行内详情 */
+tr.detail-row > td {
+  background: var(--bg);
+  border-top: 0;
+  border-bottom: 1px solid var(--border-soft);
+  padding: 10px 14px 12px 34px !important;
+  color: var(--text-dim);
+}
+
+/* 展开/收起详情的小箭头 */
+td.cell-exp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 8px !important;
+}
+
+td.cell-exp .exp {
+  padding: 0 4px;
+  min-width: 20px;
+  color: var(--text-mute);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
+td.cell-exp .exp:hover {
+  color: var(--accent);
+  background: transparent;
+}
+
+/* 卡片化（≤720px）：网段/主机行作为卡片标题条，详情行作为卡片内的展开区 */
 @media (max-width: 720px) {
   table.data[data-stack='1'] tbody tr.group-row {
     border: 0;
@@ -594,16 +648,29 @@ tr.group-row .g-summary {
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
-    margin: 4px 0;
+    margin: 6px 0 2px;
     padding: 8px 10px !important;
     border: 0;
-    border-bottom: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-hover);
+  }
+
+  table.data[data-stack='1'] tbody tr.host-row > td {
+    margin-left: 14px;
+    background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
   }
 
   table.data[data-stack='1'] tbody tr.group-row > td::before {
     display: none;
   }
-}
 
+  table.data[data-stack='1'] tbody tr.data-row > td:first-child,
+  table.data[data-stack='1'] tbody tr.detail-row > td {
+    padding-left: 10px !important;
+  }
+
+  table.data[data-stack='1'] td.cell-exp {
+    display: flex;
+    gap: 8px;
+  }
+}

@@ -84,18 +84,28 @@ frontend/
 `style.css` 顶部的 CSS 变量同时定义了暗色（`:root`）和亮色（`[data-theme='light']`）
 两套令牌；切换只在 `<html>` 上改 `data-theme`，并在 `localStorage` 记住选择。
 
-## 按主机分组（端口发现 / 映射规则）
+## 表格树形分组（端口发现 / 映射规则）
 
-两页都支持把行按主机折叠显示，开关在工具栏，偏好与折叠状态记在 localStorage。
+两页的表格都是三层树，两级可折叠，行内还可展开详情：
 
-分组键的选择：**优先 MAC，解析不到时退化为 IP**。
+```
+▾ 192.168.1.0/24 · 2 台主机 · 7 个端口      ← 一级：网段（可收起）
+   ▾ 04:68:74:d9:bf:5a · 192.168.1.10 · 5  ← 二级：主机（可收起，标题含 MAC 与当前 IP）
+        ▸ 8080  tcp  ...                     ← 三级：端口行（点箭头展开详情）
+```
 
-- 规则与端口记录里只存 IP（`rule.host` / `port.host`），而 IP 会随 DHCP 变化；
-- `hosts` 表以 MAC 为身份，端口↔策略的绑定也走 MAC；
-- 因此能从 `/api/hosts` 解析出该 IP 当前所属主机的 MAC 时，用 `mac:<mac>` 作键 ——
-  设备换地址后仍留在同一组，组标题里的「当前 IP」会跟着更新；
-- 解析不到（远程主机、尚未发现、已被清理）则退化为 `ip:<ip>`，否则这些行会从界面上消失。
+层级键的选择：
 
-实现见 `src/composables/useHostGroups.js`（`buildHostIndex` / `groupByHost` /
-`rowsFor`），表格通过 `<tbody>` 内插入 `tr.group-row` 实现表头行，移动端卡片化时
-该行渲染为卡片标题条（样式在 `responsive.css` §11）。
+- **一级网段**：IPv4 取 `/24`；`127.x` 归「本机回环」；IPv6/主机名归「其它主机」。
+- **二级主机**：优先 MAC，解析不到退化为 IP。规则与端口记录里只存 IP，而 IP 会随 DHCP
+  变化；`hosts` 表以 MAC 为身份，端口↔策略绑定也走 MAC。因此能从 `/api/hosts` 解析出该 IP
+  当前所属主机的 MAC 时就用 `mac:<mac>` 作键 —— 设备换地址后仍留在同一台主机下，标题里的
+  「当前 IP」跟着更新；解析不到（远程主机、未发现、已清理）则退化为 `ip:<ip>`，否则这些行
+  会从界面上消失。
+- **详情**：端口页展示进程/PID/服务/延迟/来源规则/指纹；规则页展示目标、外部映射、网关、
+  来源、更新时间和最近错误。
+
+实现：`src/composables/useHostGroups.js`（`groupBySubnet` / `rowsForTree` / `rowKey`，
+以及两级折叠集合的 localStorage 持久化）；表格在 `<tbody>` 内插入 `tr.subnet-row`、
+`tr.host-row`、`tr.detail-row`；样式在 `responsive.css` §11，移动端卡片化时前两者渲染为
+卡片标题条。

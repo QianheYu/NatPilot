@@ -11,10 +11,11 @@ import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/for
 import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
-  groupByHost,
+  groupBySubnet,
   readCollapsed,
   readGroupPref,
-  rowsFor,
+  rowKey,
+  rowsForTree,
   writeCollapsed,
   writeGroupPref,
 } from '../composables/useHostGroups'
@@ -31,21 +32,22 @@ const editing = ref(null)
 const busy = reactive({})
 
 // 按主机分组（MAC 优先，解析不到退化为 IP），偏好与折叠状态持久化。
+// 树形分组：网段 → 主机 → 端口行；两级均可折叠，行内还能展开详情。
 const hosts = ref([])
 const grouped = ref(readGroupPref())
-const collapsed = ref(readCollapsed())
+const collapsedSubnets = ref(readCollapsed('subnet'))
+const collapsedHosts = ref(readCollapsed('host'))
+const detailRows = ref(new Set())
 
 const hostIndex = computed(() => buildHostIndex(hosts.value))
-const hostGroups = computed(() =>
-  groupByHost(ports.value, hostIndex.value, (p) => p.host, (p) => p.port),
-)
+const tree = computed(() => groupBySubnet(ports.value, hostIndex.value, (p) => p.host, (p) => p.port))
 const tableRows = computed(() =>
   grouped.value
-    ? rowsFor(hostGroups.value, collapsed.value)
+    ? rowsForTree(tree.value, collapsedSubnets.value, collapsedHosts.value)
     : ports.value.map((p) => ({ type: 'row', item: p })),
 )
 const allCollapsed = computed(
-  () => hostGroups.value.length > 0 && hostGroups.value.every((g) => collapsed.value.has(g.key)),
+  () => tree.value.length > 0 && tree.value.every((n) => collapsedSubnets.value.has(n.key)),
 )
 
 function toggleGrouped() {
@@ -53,35 +55,55 @@ function toggleGrouped() {
   writeGroupPref(grouped.value)
 }
 
-function toggleGroup(key) {
-  const next = new Set(collapsed.value)
+function toggleSubnet(key) {
+  const next = new Set(collapsedSubnets.value)
   if (next.has(key)) next.delete(key)
   else next.add(key)
-  collapsed.value = next
-  writeCollapsed(next)
+  collapsedSubnets.value = next
+  writeCollapsed('subnet', next)
 }
+
+function toggleHost(key) {
+  const next = new Set(collapsedHosts.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedHosts.value = next
+  writeCollapsed('host', next)
+}
+
+function toggleDetail(id) {
+  const next = new Set(detailRows.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  detailRows.value = next
+}
+
+// 「全部折叠」两级都收起；「全部展开」两级都放开。
+const everythingCollapsed = computed(
+  () =>
+    allCollapsed.value &&
+    tree.value.every((n) => n.hosts.every((h) => collapsedHosts.value.has(h.key))),
+)
 
 function toggleAllGroups() {
-  const next = new Set()
-  if (!allCollapsed.value) hostGroups.value.forEach((g) => next.add(g.key))
-  collapsed.value = next
-  writeCollapsed(next)
-}
-
-async function loadHosts() {
-  try {
-    const res = await api.hosts({ limit: 2000 })
-    hosts.value = res.hosts || []
-  } catch {
-    hosts.value = []
+  const sn = new Set()
+  const hn = new Set()
+  if (!everythingCollapsed.value) {
+    tree.value.forEach((n) => {
+      sn.add(n.key)
+      n.hosts.forEach((h) => hn.add(h.key))
+    })
   }
+  collapsedSubnets.value = sn
+  collapsedHosts.value = hn
+  writeCollapsed('subnet', sn)
+  writeCollapsed('host', hn)
 }
 
 function reload() {
   load()
   loadHosts()
-}
-const editor = reactive({ id: null, tags: [], note: '' })
+}const editor = reactive({ id: null, tags: [], note: '' })
 
 const statusOptions = [
   { value: '', label: '全部状态' },
@@ -324,7 +346,7 @@ onMounted(() => {
           <table class="data">
             <thead>
               <tr>
-                <th style="width: 34px">
+                <th style="width: 62px">
                   <input type="checkbox" :checked="selected.size === ports.length && ports.length > 0" @change="toggleAll" />
                 </th>
                 <th>状态</th>
@@ -338,61 +360,92 @@ onMounted(() => {
                 <th class="right" style="width: 210px">操作</th>
               </tr>
             </thead>
-            <tbody>
-              <template
-                v-for="row in tableRows"
-                :key="row.type === 'group' ? 'g-' + row.group.key : row.item.id"
-              >
-                <tr v-if="row.type === 'group'" class="group-row" @click="toggleGroup(row.group.key)">
+                        <tbody>
+              <template v-for="row in tableRows" :key="rowKey(row)">
+                <tr v-if="row.type === 'subnet'" class="group-row subnet-row" @click="toggleSubnet(row.subnet.key)">
                   <td :colspan="10">
-                    <span class="g-chev">{{ collapsed.has(row.group.key) ? '▸' : '▾' }}</span>
-                    <span class="g-title">{{ row.group.title }}</span>
-                    <span v-if="row.group.mac" class="g-mac mono">{{ row.group.mac }}</span>
-                    <span class="g-ip mono">{{ row.group.mac ? row.group.subtitle : row.group.ip }}</span>
-                    <span class="badge accent">{{ row.group.items.length }}</span>
-                    <span v-if="collapsed.has(row.group.key)" class="g-summary small mute">
-                      端口 {{ row.group.items.map((x) => x.port).join(', ') }}
-                    </span>
+                    <span class="g-chev">{{ collapsedSubnets.has(row.subnet.key) ? '▸' : '▾' }}</span>
+                    <span class="g-title">{{ row.subnet.label }}</span>
+                    <span class="badge">{{ row.subnet.hosts.length }} 台主机</span>
+                    <span class="badge accent">{{ row.subnet.count }} 个端口</span>
                   </td>
                 </tr>
-                <tr v-else :class="{ selected: selected.has(row.item.id) }">
-                  <td><input type="checkbox" :checked="selected.has(row.item.id)" @change="toggleSelect(row.item.id)" /></td>
-                  <td>
-                    <Badge :kind="portStatusInfo(row.item.status).kind">{{ portStatusInfo(row.item.status).label }}</Badge>
-                  </td>
-                  <td class="mono small nowrap">{{ row.item.host }}:{{ row.item.port }}</td>
-                  <td><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
-                  <td class="small">{{ row.item.service || '—' }}</td>
-                  <td class="small dim">{{ truncate(row.item.process, 30) || '—' }}</td>
-                  <td class="small mute">{{ truncate(row.item.banner, 42) || '—' }}</td>
-                  <td>
-                    <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
-                    <span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span>
-                  </td>
-                  <td class="small mute nowrap">{{ fmtRelative(row.item.last_seen) }}</td>
-                  <td>
-                    <div class="cell-actions">
-                      <button
-                        v-if="!row.item.added"
-                        class="btn sm primary"
-                        :disabled="!canWrite() || busy['p' + row.item.id + 'add']"
-                        @click="decision(row.item, 'add')"
-                      >
-                        添加到列表
-                      </button>
-                      <button
-                        v-if="!row.item.ignored"
-                        class="btn sm"
-                        :disabled="!canWrite()"
-                        @click="decision(row.item, 'ignore')"
-                      >
-                        忽略
-                      </button>
-                      <button class="btn sm ghost" :disabled="!canWrite()" @click="openEditor(row.item)">备注</button>
-                      <button class="btn sm danger" :disabled="!canWrite()" @click="decision(row.item, 'delete')">删除</button>
-                    </div>
+                <tr v-else-if="row.type === 'host'" class="group-row host-row" @click="toggleHost(row.host.key)">
+                  <td :colspan="10">
+                    <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
+                    <span class="g-title">{{ row.host.title }}</span>
+                    <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
+                    <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
+                    <span class="badge accent">{{ row.host.items.length }}</span>
                   </td>
                 </tr>
+                <template v-else>
+                  <tr class="data-row" :class="{ selected: selected.has(row.item.id) }">
+                    <td class="cell-exp">
+                      <button
+                        class="btn sm ghost exp"
+                        :title="detailRows.has(row.item.id) ? '收起详情' : '展开详情'"
+                        @click.stop="toggleDetail(row.item.id)"
+                      >
+                        {{ detailRows.has(row.item.id) ? '▾' : '▸' }}
+                      </button>
+                      <input type="checkbox" :checked="selected.has(row.item.id)" @change="toggleSelect(row.item.id)" />
+                    </td>
+                    <td>
+                      <Badge :kind="portStatusInfo(row.item.status).kind">{{ portStatusInfo(row.item.status).label }}</Badge>
+                    </td>
+                    <td class="mono small nowrap">{{ row.item.host }}:{{ row.item.port }}</td>
+                    <td><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
+                    <td class="small">{{ row.item.service || '—' }}</td>
+                    <td class="small dim">{{ truncate(row.item.process, 30) || '—' }}</td>
+                    <td class="small mute">{{ truncate(row.item.banner, 42) || '—' }}</td>
+                    <td>
+                      <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
+                      <span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span>
+                    </td>
+                    <td class="small mute nowrap">{{ fmtRelative(row.item.last_seen) }}</td>
+                    <td>
+                      <div class="cell-actions">
+                        <button
+                          v-if="!row.item.added"
+                          class="btn sm primary"
+                          :disabled="!canWrite() || busy['p' + row.item.id + 'add']"
+                          @click="decision(row.item, 'add')"
+                        >
+                          添加到列表
+                        </button>
+                        <button
+                          v-if="!row.item.ignored"
+                          class="btn sm"
+                          :disabled="!canWrite()"
+                          @click="decision(row.item, 'ignore')"
+                        >
+                          忽略
+                        </button>
+                        <button class="btn sm ghost" :disabled="!canWrite()" @click="openEditor(row.item)">备注</button>
+                        <button class="btn sm danger" :disabled="!canWrite()" @click="decision(row.item, 'delete')">删除</button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-if="detailRows.has(row.item.id)" class="detail-row">
+                    <td :colspan="10">
+                      <div class="row wrap" style="gap: 20px">
+                        <span class="small"><span class="mute">进程</span> <span class="mono">{{ row.item.process || '—' }}</span></span>
+                        <span class="small"><span class="mute">PID</span> <span class="mono">{{ row.item.pid || '—' }}</span></span>
+                        <span class="small"><span class="mute">服务</span> {{ row.item.service || '—' }}</span>
+                        <span class="small"><span class="mute">延迟</span> {{ row.item.latency_ms ? row.item.latency_ms + ' ms' : '—' }}</span>
+                        <span class="small"><span class="mute">最近发现</span> {{ fmtRelative(row.item.last_seen) }}</span>
+                        <span class="small"><span class="mute">来源规则</span> <span class="mono">{{ row.item.rule_id ? '#' + row.item.rule_id : '—' }}</span></span>
+                      </div>
+                      <div v-if="row.item.banner" class="small mono" style="margin-top: 6px">
+                        <span class="mute">指纹</span> {{ row.item.banner }}
+                      </div>
+                      <div v-if="row.item.tags && row.item.tags.length" class="row wrap" style="margin-top: 6px; gap: 6px">
+                        <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
               </template>
             </tbody>
           </table>
