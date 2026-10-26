@@ -83,3 +83,19 @@ frontend/
 
 `style.css` 顶部的 CSS 变量同时定义了暗色（`:root`）和亮色（`[data-theme='light']`）
 两套令牌；切换只在 `<html>` 上改 `data-theme`，并在 `localStorage` 记住选择。
+
+## 按主机分组（端口发现 / 映射规则）
+
+两页都支持把行按主机折叠显示，开关在工具栏，偏好与折叠状态记在 localStorage。
+
+分组键的选择：**优先 MAC，解析不到时退化为 IP**。
+
+- 规则与端口记录里只存 IP（`rule.host` / `port.host`），而 IP 会随 DHCP 变化；
+- `hosts` 表以 MAC 为身份，端口↔策略的绑定也走 MAC；
+- 因此能从 `/api/hosts` 解析出该 IP 当前所属主机的 MAC 时，用 `mac:<mac>` 作键 ——
+  设备换地址后仍留在同一组，组标题里的「当前 IP」会跟着更新；
+- 解析不到（远程主机、尚未发现、已被清理）则退化为 `ip:<ip>`，否则这些行会从界面上消失。
+
+实现见 `src/composables/useHostGroups.js`（`buildHostIndex` / `groupByHost` /
+`rowsFor`），表格通过 `<tbody>` 内插入 `tr.group-row` 实现表头行，移动端卡片化时
+该行渲染为卡片标题条（样式在 `responsive.css` §11）。

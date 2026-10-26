@@ -9,6 +9,15 @@ import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
 import { useLive } from '../composables/useLive'
+import {
+  buildHostIndex,
+  groupByHost,
+  readCollapsed,
+  readGroupPref,
+  rowsFor,
+  writeCollapsed,
+  writeGroupPref,
+} from '../composables/useHostGroups'
 
 const loading = ref(true)
 const ports = ref([])
@@ -20,6 +29,58 @@ const showScan = ref(false)
 const showEditor = ref(false)
 const editing = ref(null)
 const busy = reactive({})
+
+// 按主机分组（MAC 优先，解析不到退化为 IP），偏好与折叠状态持久化。
+const hosts = ref([])
+const grouped = ref(readGroupPref())
+const collapsed = ref(readCollapsed())
+
+const hostIndex = computed(() => buildHostIndex(hosts.value))
+const hostGroups = computed(() =>
+  groupByHost(ports.value, hostIndex.value, (p) => p.host, (p) => p.port),
+)
+const tableRows = computed(() =>
+  grouped.value
+    ? rowsFor(hostGroups.value, collapsed.value)
+    : ports.value.map((p) => ({ type: 'row', item: p })),
+)
+const allCollapsed = computed(
+  () => hostGroups.value.length > 0 && hostGroups.value.every((g) => collapsed.value.has(g.key)),
+)
+
+function toggleGrouped() {
+  grouped.value = !grouped.value
+  writeGroupPref(grouped.value)
+}
+
+function toggleGroup(key) {
+  const next = new Set(collapsed.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsed.value = next
+  writeCollapsed(next)
+}
+
+function toggleAllGroups() {
+  const next = new Set()
+  if (!allCollapsed.value) hostGroups.value.forEach((g) => next.add(g.key))
+  collapsed.value = next
+  writeCollapsed(next)
+}
+
+async function loadHosts() {
+  try {
+    const res = await api.hosts({ limit: 2000 })
+    hosts.value = res.hosts || []
+  } catch {
+    hosts.value = []
+  }
+}
+
+function reload() {
+  load()
+  loadHosts()
+}
 const editor = reactive({ id: null, tags: [], note: '' })
 
 const statusOptions = [
@@ -209,7 +270,10 @@ function applyStatusChip(status) {
   load()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadHosts()
+})
 </script>
 
 <template>
@@ -223,7 +287,11 @@ onMounted(load)
         <Switch v-model="filters.open_only" @update:model-value="load" />
         <span class="small dim">只看存活</span>
       </label>
-      <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
+      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先 MAC，其次 IP）分组显示" @click="toggleGrouped">
+        {{ grouped ? '已按主机分组' : '按主机分组' }}
+      </button>
+      <button v-if="grouped" class="btn sm" @click="toggleAllGroups">{{ allCollapsed ? '全部展开' : '全部折叠' }}</button>
+      <button class="btn" @click="reload"><span v-if="loading" class="spin">◌</span>刷新</button>
       <button class="btn" :disabled="busy.bulk" @click="clearClosed">清理无效记录</button>
       <div class="spacer" style="flex: 1" />
       <template v-if="selected.size">
@@ -271,44 +339,61 @@ onMounted(load)
               </tr>
             </thead>
             <tbody>
-              <tr v-for="p in ports" :key="p.id" :class="{ selected: selected.has(p.id) }">
-                <td><input type="checkbox" :checked="selected.has(p.id)" @change="toggleSelect(p.id)" /></td>
-                <td>
-                  <Badge :kind="portStatusInfo(p.status).kind">{{ portStatusInfo(p.status).label }}</Badge>
-                </td>
-                <td class="mono small nowrap">{{ p.host }}:{{ p.port }}</td>
-                <td><Badge :kind="protocolTag(p.protocol).kind">{{ protocolTag(p.protocol).label }}</Badge></td>
-                <td class="small">{{ p.service || '—' }}</td>
-                <td class="small dim">{{ truncate(p.process, 30) || '—' }}</td>
-                <td class="small mute">{{ truncate(p.banner, 42) || '—' }}</td>
-                <td>
-                  <span v-for="t in p.tags" :key="t" class="tag">{{ t }}</span>
-                  <span v-if="!p.tags || !p.tags.length" class="mute small">—</span>
-                </td>
-                <td class="small mute nowrap">{{ fmtRelative(p.last_seen) }}</td>
-                <td>
-                  <div class="cell-actions">
-                    <button
-                      v-if="!p.added"
-                      class="btn sm primary"
-                      :disabled="!canWrite() || busy['p' + p.id + 'add']"
-                      @click="decision(p, 'add')"
-                    >
-                      添加到列表
-                    </button>
-                    <button
-                      v-if="!p.ignored"
-                      class="btn sm"
-                      :disabled="!canWrite()"
-                      @click="decision(p, 'ignore')"
-                    >
-                      忽略
-                    </button>
-                    <button class="btn sm ghost" :disabled="!canWrite()" @click="openEditor(p)">备注</button>
-                    <button class="btn sm danger" :disabled="!canWrite()" @click="decision(p, 'delete')">删除</button>
-                  </div>
-                </td>
-              </tr>
+              <template
+                v-for="row in tableRows"
+                :key="row.type === 'group' ? 'g-' + row.group.key : row.item.id"
+              >
+                <tr v-if="row.type === 'group'" class="group-row" @click="toggleGroup(row.group.key)">
+                  <td :colspan="10">
+                    <span class="g-chev">{{ collapsed.has(row.group.key) ? '▸' : '▾' }}</span>
+                    <span class="g-title">{{ row.group.title }}</span>
+                    <span v-if="row.group.mac" class="g-mac mono">{{ row.group.mac }}</span>
+                    <span class="g-ip mono">{{ row.group.mac ? row.group.subtitle : row.group.ip }}</span>
+                    <span class="badge accent">{{ row.group.items.length }}</span>
+                    <span v-if="collapsed.has(row.group.key)" class="g-summary small mute">
+                      端口 {{ row.group.items.map((x) => x.port).join(', ') }}
+                    </span>
+                  </td>
+                </tr>
+                <tr v-else :class="{ selected: selected.has(row.item.id) }">
+                  <td><input type="checkbox" :checked="selected.has(row.item.id)" @change="toggleSelect(row.item.id)" /></td>
+                  <td>
+                    <Badge :kind="portStatusInfo(row.item.status).kind">{{ portStatusInfo(row.item.status).label }}</Badge>
+                  </td>
+                  <td class="mono small nowrap">{{ row.item.host }}:{{ row.item.port }}</td>
+                  <td><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
+                  <td class="small">{{ row.item.service || '—' }}</td>
+                  <td class="small dim">{{ truncate(row.item.process, 30) || '—' }}</td>
+                  <td class="small mute">{{ truncate(row.item.banner, 42) || '—' }}</td>
+                  <td>
+                    <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
+                    <span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span>
+                  </td>
+                  <td class="small mute nowrap">{{ fmtRelative(row.item.last_seen) }}</td>
+                  <td>
+                    <div class="cell-actions">
+                      <button
+                        v-if="!row.item.added"
+                        class="btn sm primary"
+                        :disabled="!canWrite() || busy['p' + row.item.id + 'add']"
+                        @click="decision(row.item, 'add')"
+                      >
+                        添加到列表
+                      </button>
+                      <button
+                        v-if="!row.item.ignored"
+                        class="btn sm"
+                        :disabled="!canWrite()"
+                        @click="decision(row.item, 'ignore')"
+                      >
+                        忽略
+                      </button>
+                      <button class="btn sm ghost" :disabled="!canWrite()" @click="openEditor(row.item)">备注</button>
+                      <button class="btn sm danger" :disabled="!canWrite()" @click="decision(row.item, 'delete')">删除</button>
+                    </div>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>

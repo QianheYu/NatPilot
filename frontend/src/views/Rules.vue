@@ -9,6 +9,15 @@ import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, protocolTag, shortProvider, statusInfo, truncate } from '../utils/format'
 import { useLive } from '../composables/useLive'
+import {
+  buildHostIndex,
+  groupByHost,
+  readCollapsed,
+  readGroupPref,
+  rowsFor,
+  writeCollapsed,
+  writeGroupPref,
+} from '../composables/useHostGroups'
 
 const loading = ref(true)
 const rules = ref([])
@@ -19,6 +28,59 @@ const filters = reactive({ q: '', tags: [], enabled: '', protocol: '', sort: 'id
 const showEditor = ref(false)
 const editing = ref(null)
 const busy = reactive({})
+
+// 按主机分组：默认开启，分组键是 MAC（解析不到时退化为 IP），偏好记在 localStorage。
+const hosts = ref([])
+const grouped = ref(readGroupPref())
+const collapsed = ref(readCollapsed())
+
+const hostIndex = computed(() => buildHostIndex(hosts.value))
+const hostGroups = computed(() =>
+  groupByHost(rules.value, hostIndex.value, (r) => r.host, (r) => r.port),
+)
+const tableRows = computed(() =>
+  grouped.value
+    ? rowsFor(hostGroups.value, collapsed.value)
+    : rules.value.map((r) => ({ type: 'row', item: r })),
+)
+const allCollapsed = computed(
+  () => hostGroups.value.length > 0 && hostGroups.value.every((g) => collapsed.value.has(g.key)),
+)
+
+function toggleGrouped() {
+  grouped.value = !grouped.value
+  writeGroupPref(grouped.value)
+}
+
+function toggleGroup(key) {
+  const next = new Set(collapsed.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsed.value = next
+  writeCollapsed(next)
+}
+
+function toggleAllGroups() {
+  const next = new Set()
+  if (!allCollapsed.value) hostGroups.value.forEach((g) => next.add(g.key))
+  collapsed.value = next
+  writeCollapsed(next)
+}
+
+// 主机表用于 IP→MAC 解析；失败时分组自动退化为按 IP。
+async function loadHosts() {
+  try {
+    const res = await api.hosts({ limit: 2000 })
+    hosts.value = res.hosts || []
+  } catch {
+    hosts.value = []
+  }
+}
+
+function reload() {
+  load()
+  loadHosts()
+}
 const confirmState = ref(null)
 
 const form = reactive({
@@ -197,7 +259,10 @@ async function bulk(action, extra = {}) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadHosts()
+})
 </script>
 
 <template>
@@ -217,7 +282,11 @@ onMounted(load)
       <select v-model="filters.tags" class="select" style="width: 150px" multiple size="1" @change="load">
         <option v-for="(c, t) in allTags" :key="t" :value="t">{{ t }} ({{ c }})</option>
       </select>
-      <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
+      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先 MAC，其次 IP）分组显示" @click="toggleGrouped">
+        {{ grouped ? '已按主机分组' : '按主机分组' }}
+      </button>
+      <button v-if="grouped" class="btn sm" @click="toggleAllGroups">{{ allCollapsed ? '全部展开' : '全部折叠' }}</button>
+      <button class="btn" @click="reload"><span v-if="loading" class="spin">◌</span>刷新</button>
       <div class="spacer" style="flex: 1" />
       <template v-if="selected.size">
         <span class="badge accent">已选 {{ selected.size }}</span>
@@ -252,46 +321,65 @@ onMounted(load)
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in rules" :key="r.id" :class="{ selected: selected.has(r.id) }">
-                <td><input type="checkbox" :checked="selected.has(r.id)" @change="toggleSelect(r.id)" /></td>
-                <td class="mono small mute">{{ r.id }}</td>
-                <td>
-                  <Badge :kind="statusInfo(r.mapping_status).kind" :dot="r.mapping_status === 'active'">
-                    {{ statusInfo(r.mapping_status).label }}
-                  </Badge>
-                  <div v-if="r.last_error" class="small" style="color: var(--danger); margin-top: 3px" :title="r.last_error">
-                    {{ truncate(r.last_error, 28) }}
-                  </div>
-                  <div v-else-if="r.conflict_with" class="small mute" style="margin-top: 3px">与 #{{ r.conflict_with }} 冲突</div>
-                </td>
-                <td class="mono small nowrap">{{ r.host }}:{{ r.port }}</td>
-                <td class="mono small nowrap">
-                  <span v-if="r.external_port">{{ r.external_ip || '?' }}:{{ r.external_port }}</span>
-                  <span v-else class="mute">—</span>
-                  <div v-if="r.provider" class="small mute">{{ shortProvider(r.provider) }}</div>
-                </td>
-                <td>
-                  <Badge :kind="protocolTag(r.protocol).kind">{{ protocolTag(r.protocol).label }}</Badge>
-                </td>
-                <td>
-                  <span v-for="t in r.tags" :key="t" class="tag">{{ t }}</span>
-                  <span v-if="!r.tags || !r.tags.length" class="mute small">—</span>
-                </td>
-                <td>
-                  <div>{{ r.name || '(未命名)' }}</div>
-                  <div v-if="r.note" class="small mute">{{ truncate(r.note, 40) }}</div>
-                </td>
-                <td>
-                  <Switch :model-value="r.enabled" :disabled="!canWrite()" @update:model-value="(v) => toggleEnabled(r, v)" />
-                </td>
-                <td>
-                  <div class="cell-actions">
-                    <button class="btn sm" :disabled="busy['apply' + r.id]" @click="apply(r)">同步</button>
-                    <button v-if="canWrite()" class="btn sm ghost" @click="openEdit(r)">编辑</button>
-                    <button v-if="canWrite()" class="btn sm danger" @click="remove(r)">删除</button>
-                  </div>
-                </td>
-              </tr>
+              <template
+                v-for="row in tableRows"
+                :key="row.type === 'group' ? 'g-' + row.group.key : row.item.id"
+              >
+                <tr v-if="row.type === 'group'" class="group-row" @click="toggleGroup(row.group.key)">
+                  <td :colspan="10">
+                    <span class="g-chev">{{ collapsed.has(row.group.key) ? '▸' : '▾' }}</span>
+                    <span class="g-title">{{ row.group.title }}</span>
+                    <span v-if="row.group.mac" class="g-mac mono">{{ row.group.mac }}</span>
+                    <span class="g-ip mono">{{ row.group.mac ? row.group.subtitle : row.group.ip }}</span>
+                    <span class="badge accent">{{ row.group.items.length }}</span>
+                    <span v-if="collapsed.has(row.group.key)" class="g-summary small mute">
+                      端口 {{ row.group.items.map((x) => x.port).join(', ') }}
+                    </span>
+                  </td>
+                </tr>
+                <tr v-else :class="{ selected: selected.has(row.item.id) }">
+                  <td><input type="checkbox" :checked="selected.has(row.item.id)" @change="toggleSelect(row.item.id)" /></td>
+                  <td class="mono small mute">{{ row.item.id }}</td>
+                  <td>
+                    <Badge :kind="statusInfo(row.item.mapping_status).kind" :dot="row.item.mapping_status === 'active'">
+                      {{ statusInfo(row.item.mapping_status).label }}
+                    </Badge>
+                    <div v-if="row.item.last_error" class="small" style="color: var(--danger); margin-top: 3px" :title="row.item.last_error">
+                      {{ truncate(row.item.last_error, 28) }}
+                    </div>
+                    <div v-else-if="row.item.conflict_with" class="small mute" style="margin-top: 3px">
+                      与 #{{ row.item.conflict_with }} 冲突
+                    </div>
+                  </td>
+                  <td class="mono small nowrap">{{ row.item.host }}:{{ row.item.port }}</td>
+                  <td class="mono small nowrap">
+                    <span v-if="row.item.external_port">{{ row.item.external_ip || '?' }}:{{ row.item.external_port }}</span>
+                    <span v-else class="mute">—</span>
+                    <div v-if="row.item.provider" class="small mute">{{ shortProvider(row.item.provider) }}</div>
+                  </td>
+                  <td>
+                    <Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge>
+                  </td>
+                  <td>
+                    <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
+                    <span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span>
+                  </td>
+                  <td>
+                    <div>{{ row.item.name || '(未命名)' }}</div>
+                    <div v-if="row.item.note" class="small mute">{{ truncate(row.item.note, 40) }}</div>
+                  </td>
+                  <td>
+                    <Switch :model-value="row.item.enabled" :disabled="!canWrite()" @update:model-value="(v) => toggleEnabled(row.item, v)" />
+                  </td>
+                  <td>
+                    <div class="cell-actions">
+                      <button class="btn sm" :disabled="busy['apply' + row.item.id]" @click="apply(row.item)">同步</button>
+                      <button v-if="canWrite()" class="btn sm ghost" @click="openEdit(row.item)">编辑</button>
+                      <button v-if="canWrite()" class="btn sm danger" @click="remove(row.item)">删除</button>
+                    </div>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
