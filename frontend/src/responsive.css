@@ -543,63 +543,154 @@ pre,
 
 /* ------------------------------- 11. tree rows (subnet → host → port + detail) */
 
-/* 端口发现 / 映射规则 的树形表：一级网段、二级主机，两级都可点击收起。 */
-tr.group-row > td {
+/* 三层树：一级网段、二级主机、三级端口行。两级都可点击收起，组行带三态复选框，
+   以便按类别批量选中。 */
+
+table.data tbody tr.group-row > td {
+  padding: 0 !important;
+  border-top: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
-  border-top: 1px solid var(--border);
 }
 
-tr.group-row:hover > td {
-  background: var(--accent-soft);
+/* 组行内部是一条 flex 栏：复选框 + 箭头 + 标题 + 统计胶囊 + 折叠时的端口预览 */
+.grp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
 }
 
-tr.group-row .g-chev {
-  display: inline-block;
-  width: 14px;
+.grp .grp-check {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.g-chev {
+  flex: none;
+  width: 13px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.g-title {
+  font-weight: 620;
+  flex: none;
+}
+
+.g-chip {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev);
   color: var(--text-dim);
   font-size: 11px;
 }
 
-tr.group-row .g-title {
-  font-weight: 620;
+.g-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
 }
 
-tr.group-row .g-mac,
-tr.group-row .g-ip {
-  margin-left: 8px;
+.g-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+
+.g-tag.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.g-tag.accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.g-tag.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.g-tag.info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.g-preview {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-mute);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g-mac,
+.g-ip {
+  flex: none;
   color: var(--text-dim);
   font-size: 11.5px;
 }
 
-tr.group-row .badge,
-tr.group-row .g-summary {
-  margin-left: 8px;
-}
-
-/* 一级：网段 —— 更重的底色与字号，作为层级的骨架 */
+/* 一级：网段 —— 左侧强调竖条 + 更重的底色 */
 tr.subnet-row > td {
+  border-left: 3px solid var(--accent);
   background: var(--bg-hover);
-  padding: 9px 12px !important;
-  font-size: 12px;
-  letter-spacing: 0.2px;
 }
 
-/* 二级：主机 —— 缩进一级，底色与普通行区分 */
+tr.subnet-row .grp {
+  padding: 9px 12px 9px 9px;
+  font-size: 12px;
+}
+
+tr.subnet-row .g-title {
+  font-size: 12.5px;
+}
+
+/* 二级：主机 —— 缩进一级、竖条变细变浅 */
 tr.host-row > td {
+  border-left: 3px solid var(--border);
   background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
-  padding: 7px 12px 7px 26px !important;
+}
+
+tr.host-row .grp {
+  padding: 7px 12px 7px 26px;
   font-size: 12px;
-  border-top: 0;
 }
 
-tr.host-row .g-title {
-  font-weight: 600;
+/* 收起状态：整条更像"可展开的标题条"，避免折叠后只剩一条光秃秃的横线 */
+tr.subnet-row.is-collapsed > td,
+tr.host-row.is-collapsed > td {
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg-elev));
 }
 
-/* 三级：数据行 —— 再缩进一级，与主机行形成视觉层级 */
+tr.subnet-row.is-collapsed > td {
+  border-bottom: 1px solid var(--border);
+}
+
+tr.host-row.is-collapsed > td {
+  border-left-color: var(--accent);
+}
+
+tr.group-row:hover > td {
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--bg-elev));
+}
+
+/* 三级：数据行 —— 再缩进一级 */
 tr.data-row > td:first-child {
-  padding-left: 34px;
+  padding-left: 34px !important;
 }
 
 /* 行内详情 */
@@ -611,7 +702,7 @@ tr.detail-row > td {
   color: var(--text-dim);
 }
 
-/* 展开/收起详情的小箭头 */
+/* 展开详情的小箭头 */
 td.cell-exp {
   display: flex;
   align-items: center;
@@ -634,43 +725,38 @@ td.cell-exp .exp:hover {
   background: transparent;
 }
 
-/* 卡片化（≤720px）：网段/主机行作为卡片标题条，详情行作为卡片内的展开区 */
+/* 卡片化（≤720px）：组行作为卡片标题条，统计胶囊换行显示 */
 @media (max-width: 720px) {
   table.data[data-stack='1'] tbody tr.group-row {
     border: 0;
     background: transparent;
-    margin: 0;
-    padding: 0;
   }
 
   table.data[data-stack='1'] tbody tr.group-row > td {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin: 6px 0 2px;
-    padding: 8px 10px !important;
-    border: 0;
+    border-left-width: 3px;
     border-radius: var(--radius-sm);
-    background: var(--bg-hover);
+    margin: 6px 0 2px;
+    border-top: 0;
   }
 
   table.data[data-stack='1'] tbody tr.host-row > td {
-    margin-left: 14px;
-    background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
+    margin-left: 12px;
   }
 
-  table.data[data-stack='1'] tbody tr.group-row > td::before {
-    display: none;
+  .grp {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .g-preview {
+    flex-basis: 100%;
+    margin-left: 0;
+    padding-left: 21px;
   }
 
   table.data[data-stack='1'] tbody tr.data-row > td:first-child,
   table.data[data-stack='1'] tbody tr.detail-row > td {
     padding-left: 10px !important;
-  }
-
-  table.data[data-stack='1'] td.cell-exp {
-    display: flex;
-    gap: 8px;
   }
 }

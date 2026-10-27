@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
+import GroupCheckbox from '../components/GroupCheckbox.vue'
 import Modal from '../components/Modal.vue'
 import TagInput from '../components/TagInput.vue'
 import Switch from '../components/Switch.vue'
@@ -96,6 +97,54 @@ function toggleAllGroups() {
   collapsedHosts.value = hn
   writeCollapsed('subnet', sn)
   writeCollapsed('host', hn)
+}
+
+// ---- 分组批量选择 ------------------------------------------------------------
+// itemsOf 把网段节点（含 hosts）或主机节点统一成条目数组。
+function itemsOf(node) {
+  return node && node.hosts ? node.hosts.flatMap((h) => h.items) : (node && node.items) || []
+}
+
+// groupState 返回 all / some / none，用于分组复选框的勾选与半选状态。
+function groupState(items) {
+  if (!items.length) return 'none'
+  let hit = 0
+  for (const it of items) if (selected.value.has(it.id)) hit++
+  if (hit === 0) return 'none'
+  return hit === items.length ? 'all' : 'some'
+}
+
+// toggleGroupSelect 点一下全选该组，再点取消该组（不影响其它组已选的条目）。
+function toggleGroupSelect(items) {
+  const next = new Set(selected.value)
+  const all = groupState(items) === 'all'
+  for (const it of items) {
+    if (all) next.delete(it.id)
+    else next.add(it.id)
+  }
+  selected.value = next
+}
+
+// groupSummary 给出折叠状态下也能看懂的分类统计。
+function groupSummary(items) {
+  const out = []
+  const counts = { enabled: 0, disabled: 0, failed: 0 }
+  for (const it of items) {
+    if (!it.enabled) counts.disabled++
+    else counts.enabled++
+    if (it.mapping_status && it.mapping_status !== 'active' && it.mapping_status !== 'none') counts.failed++
+  }
+  out.push({ label: '启用', count: counts.enabled, kind: 'ok' })
+  out.push({ label: '停用', count: counts.disabled, kind: 'muted' })
+  out.push({ label: '未生效', count: counts.failed, kind: 'warn' })
+  return out.filter((x) => x.count > 0)
+}
+
+// portPreview 折叠时展示该组包含的端口，避免只剩一条光秃秃的标题。
+function portPreview(items) {
+  const ports = [...new Set(items.map((it) => it.port))].sort((a, b) => a - b)
+  const head = ports.slice(0, 12).join(', ')
+  return ports.length > 12 ? head + ' …' : head
 }
 
 // 主机表用于 IP→MAC 解析；失败时分组自动退化为按 IP。
@@ -353,21 +402,57 @@ onMounted(() => {
             </thead>
                         <tbody>
               <template v-for="row in tableRows" :key="rowKey(row)">
-                <tr v-if="row.type === 'subnet'" class="group-row subnet-row" @click="toggleSubnet(row.subnet.key)">
+                <tr v-if="row.type === 'subnet'" class="group-row subnet-row" :class="{ 'is-collapsed': collapsedSubnets.has(row.subnet.key) }" @click="toggleSubnet(row.subnet.key)">
                   <td :colspan="10">
-                    <span class="g-chev">{{ collapsedSubnets.has(row.subnet.key) ? '▸' : '▾' }}</span>
-                    <span class="g-title">{{ row.subnet.label }}</span>
-                    <span class="badge">{{ row.subnet.hosts.length }} 台主机</span>
-                    <span class="badge accent">{{ row.subnet.count }} 个端口</span>
+                    <div class="grp">
+                      <GroupCheckbox
+                        class="grp-check"
+                        :checked="groupState(itemsOf(row.subnet)) === 'all'"
+                        :indeterminate="groupState(itemsOf(row.subnet)) === 'some'"
+                        :disabled="!itemsOf(row.subnet).length"
+                        :title="'选中该网段下全部 ' + itemsOf(row.subnet).length + ' 条'"
+                        @change="toggleGroupSelect(itemsOf(row.subnet))"
+                      />
+                      <span class="g-chev">{{ collapsedSubnets.has(row.subnet.key) ? '▸' : '▾' }}</span>
+                      <span class="g-title">{{ row.subnet.label }}</span>
+                      <span class="g-chip">{{ row.subnet.hosts.length }} 台主机</span>
+                      <span class="g-chip">{{ row.subnet.count }} 条</span>
+                      <span class="g-tags">
+                        <span v-for="s in groupSummary(itemsOf(row.subnet))" :key="s.label" class="g-tag" :class="s.kind">
+                          {{ s.label }} {{ s.count }}
+                        </span>
+                      </span>
+                      <span v-if="collapsedSubnets.has(row.subnet.key)" class="g-preview mono">
+                        {{ portPreview(itemsOf(row.subnet)) }}
+                      </span>
+                    </div>
                   </td>
                 </tr>
-                <tr v-else-if="row.type === 'host'" class="group-row host-row" @click="toggleHost(row.host.key)">
+                <tr v-else-if="row.type === 'host'" class="group-row host-row" :class="{ 'is-collapsed': collapsedHosts.has(row.host.key) }" @click="toggleHost(row.host.key)">
                   <td :colspan="10">
-                    <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
-                    <span class="g-title">{{ row.host.title }}</span>
-                    <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
-                    <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
-                    <span class="badge accent">{{ row.host.items.length }}</span>
+                    <div class="grp">
+                      <GroupCheckbox
+                        class="grp-check"
+                        :checked="groupState(itemsOf(row.host)) === 'all'"
+                        :indeterminate="groupState(itemsOf(row.host)) === 'some'"
+                        :disabled="!itemsOf(row.host).length"
+                        :title="'选中该主机下全部 ' + itemsOf(row.host).length + ' 条'"
+                        @change="toggleGroupSelect(itemsOf(row.host))"
+                      />
+                      <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
+                      <span class="g-title">{{ row.host.title }}</span>
+                      <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
+                      <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
+                      <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
+                      <span class="g-tags">
+                        <span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">
+                          {{ s.label }} {{ s.count }}
+                        </span>
+                      </span>
+                      <span v-if="collapsedHosts.has(row.host.key)" class="g-preview mono">
+                        {{ portPreview(itemsOf(row.host)) }}
+                      </span>
+                    </div>
                   </td>
                 </tr>
                 <template v-else>
