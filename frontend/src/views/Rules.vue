@@ -385,16 +385,16 @@ onMounted(() => {
         <div v-else class="table-wrap">
           <table class="data tree">
             <colgroup>
-              <col style="width: 60px" />
-              <col style="width: 44px" />
-              <col style="width: 78px" />
-              <col style="width: 138px" />
-              <col style="width: 128px" />
-              <col style="width: 64px" />
-              <col style="width: 100px" />
-              <col style="width: 200px" />
               <col style="width: 56px" />
-              <col style="width: 148px" />
+              <col style="width: 42px" />
+              <col style="width: 74px" />
+              <col style="width: 130px" />
+              <col style="width: 120px" />
+              <col style="width: 60px" />
+              <col style="width: 94px" />
+              <col style="width: 190px" />
+              <col style="width: 52px" />
+              <col style="width: 196px" />
             </colgroup>
             <thead>
               <tr>
@@ -409,7 +409,7 @@ onMounted(() => {
                 <th>标签</th>
                 <th>名称 / 备注</th>
                 <th style="width: 66px">启用</th>
-                <th class="right" style="width: 150px">操作</th>
+                <th class="right actions" style="width: 196px">操作</th>
               </tr>
             </thead>
                         <tbody>
@@ -501,7 +501,7 @@ onMounted(() => {
                     <td>
                       <Switch :model-value="row.item.enabled" :disabled="!canWrite()" @update:model-value="(v) => toggleEnabled(row.item, v)" />
                     </td>
-                    <td>
+                    <td class="actions">
                       <div class="cell-actions">
                         <button class="btn sm" :disabled="busy['apply' + row.item.id]" @click="apply(row.item)">同步</button>
                         <button v-if="canWrite()" class="btn sm ghost" @click="openEdit(row.item)">编辑</button>

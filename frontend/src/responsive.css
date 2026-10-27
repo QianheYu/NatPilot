@@ -790,6 +790,19 @@ table.data.tree th {
   text-overflow: ellipsis;
 }
 
+/* 操作列不能裁剪：里面是按钮，裁掉就点不到了。按钮改为可换行，
+   列宽固定所以换行结果与折叠状态无关。 */
+table.data.tree td.actions,
+table.data.tree th.actions {
+  overflow: visible;
+}
+
+table.data.tree td.actions .cell-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
 /* 允许换行的长文本列（指纹、名称等未指定宽度的列）保持正常折行 */
 table.data.tree td.wrap {
   white-space: normal;

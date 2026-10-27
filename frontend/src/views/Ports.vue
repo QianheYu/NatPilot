@@ -398,16 +398,16 @@ onMounted(() => {
         <div v-else class="table-wrap">
           <table class="data tree">
             <colgroup>
+              <col style="width: 56px" />
+              <col style="width: 74px" />
+              <col style="width: 130px" />
               <col style="width: 60px" />
-              <col style="width: 78px" />
-              <col style="width: 138px" />
-              <col style="width: 64px" />
+              <col style="width: 76px" />
+              <col style="width: 104px" />
+              <col style="width: 176px" />
+              <col style="width: 96px" />
               <col style="width: 82px" />
-              <col style="width: 116px" />
-              <col style="width: 196px" />
-              <col style="width: 106px" />
-              <col style="width: 88px" />
-              <col style="width: 172px" />
+              <col style="width: 232px" />
             </colgroup>
             <thead>
               <tr>
@@ -422,7 +422,7 @@ onMounted(() => {
                 <th>指纹 / 说明</th>
                 <th>标签</th>
                 <th>最近发现</th>
-                <th class="right" style="width: 210px">操作</th>
+                <th class="right actions" style="width: 232px">操作</th>
               </tr>
             </thead>
                         <tbody>
@@ -505,7 +505,7 @@ onMounted(() => {
                       <span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span>
                     </td>
                     <td class="small mute nowrap">{{ fmtRelative(row.item.last_seen) }}</td>
-                    <td>
+                    <td class="actions">
                       <div class="cell-actions">
                         <button
                           v-if="!row.item.added"
