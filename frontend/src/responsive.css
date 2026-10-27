@@ -774,3 +774,32 @@ td.cell-exp .exp:hover {
     padding-left: 10px !important;
   }
 }
+
+/* 固定列宽的树形表 -----------------------------------------------------------
+   table-layout: auto 会按"当前可见单元格"的内容分配列宽：收起分组后只剩
+   colspan 行，列宽随即被重新分配，再展开时列宽已变、文字换行位置跟着变，
+   于是行高跳动。固定列宽（配合 <colgroup>）+ 固定行高后，展开与收起完全一致。 */
+table.data.tree {
+  table-layout: fixed;
+  width: 100%;
+}
+
+table.data.tree td,
+table.data.tree th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 允许换行的长文本列（指纹、名称等未指定宽度的列）保持正常折行 */
+table.data.tree td.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* 收起分组会让页面变短，纵向滚动条随之出现/消失；滚动条宽度变化会改变表格
+   可用宽度，进而改变列宽与换行位置。始终预留滚动条槽位即可消除这种抖动。
+   真正的滚动容器是 .app-content（不是 html），两处都声明以免遗漏。 */
+html,
+.app-content {
+  scrollbar-gutter: stable;
+}

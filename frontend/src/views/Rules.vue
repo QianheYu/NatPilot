@@ -383,7 +383,19 @@ onMounted(() => {
           <button v-if="canWrite()" class="btn primary" @click="openCreate">新增映射</button>
         </EmptyState>
         <div v-else class="table-wrap">
-          <table class="data">
+          <table class="data tree">
+            <colgroup>
+              <col style="width: 60px" />
+              <col style="width: 44px" />
+              <col style="width: 78px" />
+              <col style="width: 138px" />
+              <col style="width: 128px" />
+              <col style="width: 64px" />
+              <col style="width: 100px" />
+              <col style="width: 200px" />
+              <col style="width: 56px" />
+              <col style="width: 148px" />
+            </colgroup>
             <thead>
               <tr>
                 <th style="width: 62px">

@@ -396,7 +396,19 @@ onMounted(() => {
           <button v-if="canWrite()" class="btn primary" @click="showScan = true">开始扫描</button>
         </EmptyState>
         <div v-else class="table-wrap">
-          <table class="data">
+          <table class="data tree">
+            <colgroup>
+              <col style="width: 60px" />
+              <col style="width: 78px" />
+              <col style="width: 138px" />
+              <col style="width: 64px" />
+              <col style="width: 82px" />
+              <col style="width: 116px" />
+              <col style="width: 196px" />
+              <col style="width: 106px" />
+              <col style="width: 88px" />
+              <col style="width: 172px" />
+            </colgroup>
             <thead>
               <tr>
                 <th style="width: 62px">
