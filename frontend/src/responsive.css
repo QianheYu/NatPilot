@@ -541,30 +541,172 @@ pre,
   }
 }
 
-/* ------------------------------- 11. tree rows (subnet → host → port + detail) */
+/* ============================================================================
+   11. 树形列表（端口发现 / 映射规则）—— CSS Grid 实现
+   ----------------------------------------------------------------------------
+   早先的做法是把树塞进一张 <table>：分组行用 <td colspan>，数据行是普通行。
+   那样列宽取决于"当前可见的单元格内容"，折叠一次列宽就重排一次，进而换行、
+   行高跳动；改成固定列宽后又出现内容裁切。两者都是同一个结构性冲突。
 
-/* 三层树：一级网段、二级主机、三级端口行。两级都可点击收起，组行带三态复选框，
-   以便按类别批量选中。 */
+   这里改为 Grid：列模板只在 `.gt-tree` 的 --gt-cols 上定义一次，表头、数据行
+   都套用同一份模板。于是列宽与内容无关、与展开状态无关，分组头是普通块元素，
+   不存在 colspan。表头、行、分组头、详情互不影响，也就没有可跳动的余地。
+   ========================================================================== */
 
-table.data tbody tr.group-row > td {
-  padding: 0 !important;
+.gt-tree {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  --gt-cols: 1fr;
+}
+
+.gt-head,
+.gt-row {
+  display: grid;
+  grid-template-columns: var(--gt-cols);
+  align-items: center;
+  min-width: 0;
+}
+
+.gt-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+
+.gt-th {
+  padding: 9px 10px;
+  color: var(--text-mute);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.gt-row {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.gt-row:hover {
+  background: var(--bg-hover);
+}
+
+.gt-row.selected {
+  background: var(--accent-soft);
+}
+
+.gt-cell {
+  min-width: 0;
+  padding: 9px 10px;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gt-mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.gt-mute {
+  color: var(--text-dim);
+}
+
+.gt-dim {
+  color: var(--text-mute);
+}
+
+.gt-right {
+  text-align: right;
+}
+
+/* 首列：详情箭头 + 勾选 */
+.gt-sel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+}
+
+.gt-sel .exp {
+  padding: 0 3px;
+  min-width: 18px;
+  border: 0;
+  background: transparent;
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.gt-sel .exp:hover {
+  color: var(--accent);
+  background: transparent;
+}
+
+/* 操作列：里面是按钮，绝不能裁剪；按钮可换行（列宽固定，换行结果与折叠无关） */
+.gt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  overflow: visible;
+  padding: 6px 10px;
+}
+
+.gt-actions .btn {
+  flex: none;
+}
+
+/* ---- 分组头（普通块元素，不是表格行）---- */
+
+.gt-group {
+  display: flex;
+  flex-wrap: nowrap;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 12px;
   border-top: 1px solid var(--border);
   cursor: pointer;
+  font-size: 12px;
   user-select: none;
 }
 
-/* 组行内部是一条 flex 栏：复选框 + 箭头 + 标题 + 统计胶囊 + 折叠时的端口预览 */
-.grp {
-  display: flex;
-  flex-wrap: nowrap; /* 换行会让「收起时多出的预览」把这一行撑高，造成跳动 */
-  align-items: center;
-  gap: 8px;
-  box-sizing: border-box;
-  min-width: 0;
-  padding: 8px 12px;
+.gt-lvl1 {
+  background: var(--bg-hover);
+  border-left: 3px solid var(--accent);
 }
 
-.grp .grp-check {
+.gt-lvl1 .g-title {
+  font-size: 12.5px;
+  font-weight: 620;
+}
+
+.gt-lvl2 {
+  min-height: 36px;
+  padding: 7px 12px 7px 26px;
+  background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+  border-left: 3px solid var(--border);
+}
+
+.gt-lvl2 .g-title {
+  font-weight: 600;
+}
+
+.gt-group.is-collapsed {
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg-elev));
+}
+
+.gt-group:hover {
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--bg-elev));
+}
+
+.grp-check {
   flex: none;
   width: 15px;
   height: 15px;
@@ -581,8 +723,8 @@ table.data tbody tr.group-row > td {
 }
 
 .g-title {
-  font-weight: 620;
   flex: none;
+  font-weight: 620;
 }
 
 .g-chip {
@@ -595,6 +737,13 @@ table.data tbody tr.group-row > td {
   font-size: 11px;
 }
 
+.g-mac,
+.g-ip {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
 .g-tags {
   display: inline-flex;
   flex-wrap: wrap;
@@ -605,9 +754,9 @@ table.data tbody tr.group-row > td {
 .g-tag {
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 11px;
   background: var(--bg-hover);
   color: var(--text-dim);
+  font-size: 11px;
 }
 
 .g-tag.ok {
@@ -630,7 +779,6 @@ table.data tbody tr.group-row > td {
   color: var(--info);
 }
 
-/* 折叠时出现的端口预览：始终单行、超出省略。它只占剩余空间，不改变行高。 */
 .g-preview {
   flex: 1 1 auto;
   min-width: 0;
@@ -643,175 +791,93 @@ table.data tbody tr.group-row > td {
   white-space: nowrap;
 }
 
-.g-mac,
-.g-ip {
-  flex: none;
-  color: var(--text-dim);
-  font-size: 11.5px;
-}
+/* ---- 行内详情 ---- */
 
-/* 一级：网段 —— 左侧强调竖条 + 更重的底色 */
-tr.subnet-row > td {
-  border-left: 3px solid var(--accent);
-  background: var(--bg-hover);
-}
-
-tr.subnet-row .grp {
-  /* 固定高度基线：展开与收起的状态内容不同，但这一条的高度必须不变 */
-  min-height: 40px;
-  padding: 9px 12px 9px 9px;
-  font-size: 12px;
-}
-
-tr.subnet-row .g-title {
-  font-size: 12.5px;
-}
-
-/* 二级：主机 —— 缩进一级、竖条变细变浅 */
-tr.host-row > td {
-  border-left: 3px solid var(--border);
-  background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
-}
-
-tr.host-row .grp {
-  min-height: 36px;
-  padding: 7px 12px 7px 26px;
-  font-size: 12px;
-}
-
-/* 收起状态：整条更像"可展开的标题条"，避免折叠后只剩一条光秃秃的横线 */
-tr.subnet-row.is-collapsed > td,
-tr.host-row.is-collapsed > td {
-  background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg-elev));
-}
-
-tr.subnet-row.is-collapsed > td {
-  border-bottom: 1px solid var(--border);
-}
-
-tr.host-row.is-collapsed > td {
-  border-left-color: var(--accent);
-}
-
-tr.group-row:hover > td {
-  background: color-mix(in srgb, var(--accent-soft) 70%, var(--bg-elev));
-}
-
-/* 三级：数据行 —— 再缩进一级 */
-tr.data-row > td:first-child {
-  padding-left: 34px !important;
-}
-
-/* 行内详情 */
-tr.detail-row > td {
-  background: var(--bg);
-  border-top: 0;
+.gt-detail {
+  padding: 10px 14px 12px 34px;
   border-bottom: 1px solid var(--border-soft);
-  padding: 10px 14px 12px 34px !important;
+  background: var(--bg);
   color: var(--text-dim);
+  font-size: 12px;
 }
 
-/* 展开详情的小箭头 */
-td.cell-exp {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding-left: 8px !important;
-}
+/* ---- 窄屏：单列卡片（不再有表格列宽问题）---- */
 
-td.cell-exp .exp {
-  padding: 0 4px;
-  min-width: 20px;
-  color: var(--text-mute);
-  background: transparent;
-  border: 0;
-  font-size: 11px;
-  line-height: 1;
-}
-
-td.cell-exp .exp:hover {
-  color: var(--accent);
-  background: transparent;
-}
-
-/* 卡片化（≤720px）：组行作为卡片标题条，统计胶囊换行显示 */
 @media (max-width: 720px) {
-  table.data[data-stack='1'] tbody tr.group-row {
-    border: 0;
-    background: transparent;
-  }
-
-  table.data[data-stack='1'] tbody tr.group-row > td {
-    border-left-width: 3px;
-    border-radius: var(--radius-sm);
-    margin: 6px 0 2px;
-    border-top: 0;
-  }
-
-  table.data[data-stack='1'] tbody tr.host-row > td {
-    margin-left: 12px;
-  }
-
-  .grp {
-    flex-wrap: nowrap;
-    gap: 6px;
-    padding: 8px 10px;
-  }
-
-  /* 手机宽度下优先保住单行高度：分类统计让位，端口预览保留 */
-  .grp .g-tags {
+  .gt-head {
     display: none;
   }
 
-  .g-preview {
-    flex-basis: auto;
-    margin-left: auto;
-    padding-left: 0;
+  .gt-group {
+    margin: 8px 10px 0;
+    border-radius: var(--radius-sm);
+    border-left-width: 3px;
   }
 
-  table.data[data-stack='1'] tbody tr.data-row > td:first-child,
-  table.data[data-stack='1'] tbody tr.detail-row > td {
-    padding-left: 10px !important;
+  .gt-lvl2 {
+    margin-left: 22px;
+  }
+
+  .g-preview,
+  .g-tags {
+    display: none;
+  }
+
+  .gt-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2px;
+    margin: 8px 10px;
+    padding: 6px 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .gt-cell {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 8px;
+    align-items: baseline;
+    padding: 3px 8px;
+    white-space: normal;
+  }
+
+  .gt-cell::before {
+    content: attr(data-label);
+    color: var(--text-mute);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  .gt-cell.gt-sel {
+    display: flex;
+    gap: 8px;
+    padding-bottom: 6px;
+  }
+
+  .gt-cell.gt-sel::before,
+  .gt-cell.gt-actions::before {
+    display: none;
+  }
+
+  .gt-actions {
+    justify-content: flex-start;
+    padding: 4px 8px;
+  }
+
+  .gt-detail {
+    margin: 0 10px 8px;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
   }
 }
 
-/* 固定列宽的树形表 -----------------------------------------------------------
-   table-layout: auto 会按"当前可见单元格"的内容分配列宽：收起分组后只剩
-   colspan 行，列宽随即被重新分配，再展开时列宽已变、文字换行位置跟着变，
-   于是行高跳动。固定列宽（配合 <colgroup>）+ 固定行高后，展开与收起完全一致。 */
-table.data.tree {
-  table-layout: fixed;
-  width: 100%;
-}
-
-table.data.tree td,
-table.data.tree th {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 操作列不能裁剪：里面是按钮，裁掉就点不到了。按钮改为可换行，
-   列宽固定所以换行结果与折叠状态无关。 */
-table.data.tree td.actions,
-table.data.tree th.actions {
-  overflow: visible;
-}
-
-table.data.tree td.actions .cell-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  row-gap: 4px;
-}
-
-/* 允许换行的长文本列（指纹、名称等未指定宽度的列）保持正常折行 */
-table.data.tree td.wrap {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-/* 收起分组会让页面变短，纵向滚动条随之出现/消失；滚动条宽度变化会改变表格
-   可用宽度，进而改变列宽与换行位置。始终预留滚动条槽位即可消除这种抖动。
-   真正的滚动容器是 .app-content（不是 html），两处都声明以免遗漏。 */
+/* 收起分组会让页面变短，纵向滚动条随之出现/消失；滚动条宽度变化会改变可用宽度。
+   始终预留滚动条槽位即可消除这种抖动。真正的滚动容器是 .app-content。 */
 html,
 .app-content {
   scrollbar-gutter: stable;

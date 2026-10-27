@@ -395,94 +395,82 @@ onMounted(() => {
         <EmptyState v-if="!ports.length && !loading" icon="⌗" title="暂无端口记录" hint="点击“开始扫描”发现本机或网段内的开放端口">
           <button v-if="canWrite()" class="btn primary" @click="showScan = true">开始扫描</button>
         </EmptyState>
-        <div v-else class="table-wrap">
-          <table class="data tree">
-            <colgroup>
-              <col style="width: 56px" />
-              <col style="width: 74px" />
-              <col style="width: 130px" />
-              <col style="width: 60px" />
-              <col style="width: 76px" />
-              <col style="width: 104px" />
-              <col style="width: 176px" />
-              <col style="width: 96px" />
-              <col style="width: 82px" />
-              <col style="width: 232px" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th style="width: 62px">
+            <div class="gt-tree" style="--gt-cols: 56px 74px 130px 60px 76px 104px minmax(0, 1fr) 96px 82px 232px">
+              <div class="gt-head" role="row">
+                <div class="gt-cell gt-th gt-sel">
                   <input type="checkbox" :checked="selected.size === ports.length && ports.length > 0" @change="toggleAll" />
-                </th>
-                <th>状态</th>
-                <th>主机:端口</th>
-                <th>协议</th>
-                <th>服务</th>
-                <th>进程</th>
-                <th>指纹 / 说明</th>
-                <th>标签</th>
-                <th>最近发现</th>
-                <th class="right actions" style="width: 232px">操作</th>
-              </tr>
-            </thead>
-                        <tbody>
+                </div>
+                <div class="gt-cell gt-th">状态</div>
+                <div class="gt-cell gt-th">主机:端口</div>
+                <div class="gt-cell gt-th">协议</div>
+                <div class="gt-cell gt-th">服务</div>
+                <div class="gt-cell gt-th">进程</div>
+                <div class="gt-cell gt-th">指纹 / 说明</div>
+                <div class="gt-cell gt-th">标签</div>
+                <div class="gt-cell gt-th">最近发现</div>
+                <div class="gt-cell gt-th gt-right">操作</div>
+              </div>
               <template v-for="row in tableRows" :key="rowKey(row)">
-                <tr v-if="row.type === 'subnet'" class="group-row subnet-row" :class="{ 'is-collapsed': collapsedSubnets.has(row.subnet.key) }" @click="toggleSubnet(row.subnet.key)">
-                  <td :colspan="10">
-                    <div class="grp">
-                      <GroupCheckbox
-                        class="grp-check"
-                        :checked="groupState(itemsOf(row.subnet)) === 'all'"
-                        :indeterminate="groupState(itemsOf(row.subnet)) === 'some'"
-                        :disabled="!itemsOf(row.subnet).length"
-                        :title="'选中该网段下全部 ' + itemsOf(row.subnet).length + ' 条'"
-                        @change="toggleGroupSelect(itemsOf(row.subnet))"
-                      />
-                      <span class="g-chev">{{ collapsedSubnets.has(row.subnet.key) ? '▸' : '▾' }}</span>
-                      <span class="g-title">{{ row.subnet.label }}</span>
-                      <span class="g-chip">{{ row.subnet.hosts.length }} 台主机</span>
-                      <span class="g-chip">{{ row.subnet.count }} 条</span>
-                      <span class="g-tags">
-                        <span v-for="s in groupSummary(itemsOf(row.subnet))" :key="s.label" class="g-tag" :class="s.kind">
-                          {{ s.label }} {{ s.count }}
-                        </span>
-                      </span>
-                      <span v-if="collapsedSubnets.has(row.subnet.key)" class="g-preview mono">
-                        {{ portPreview(itemsOf(row.subnet)) }}
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-                <tr v-else-if="row.type === 'host'" class="group-row host-row" :class="{ 'is-collapsed': collapsedHosts.has(row.host.key) }" @click="toggleHost(row.host.key)">
-                  <td :colspan="10">
-                    <div class="grp">
-                      <GroupCheckbox
-                        class="grp-check"
-                        :checked="groupState(itemsOf(row.host)) === 'all'"
-                        :indeterminate="groupState(itemsOf(row.host)) === 'some'"
-                        :disabled="!itemsOf(row.host).length"
-                        :title="'选中该主机下全部 ' + itemsOf(row.host).length + ' 条'"
-                        @change="toggleGroupSelect(itemsOf(row.host))"
-                      />
-                      <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
-                      <span class="g-title">{{ row.host.title }}</span>
-                      <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
-                      <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
-                      <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
-                      <span class="g-tags">
-                        <span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">
-                          {{ s.label }} {{ s.count }}
-                        </span>
-                      </span>
-                      <span v-if="collapsedHosts.has(row.host.key)" class="g-preview mono">
-                        {{ portPreview(itemsOf(row.host)) }}
-                      </span>
-                    </div>
-                  </td>
-                </tr>
+                <div
+                  v-if="row.type === 'subnet'"
+                  class="gt-group gt-lvl1"
+                  :class="{ 'is-collapsed': collapsedSubnets.has(row.subnet.key) }"
+                  role="row"
+                  @click="toggleSubnet(row.subnet.key)"
+                >
+                  <GroupCheckbox
+                    class="grp-check"
+                    :checked="groupState(itemsOf(row.subnet)) === 'all'"
+                    :indeterminate="groupState(itemsOf(row.subnet)) === 'some'"
+                    :disabled="!itemsOf(row.subnet).length"
+                    :title="'选中该网段下全部 ' + itemsOf(row.subnet).length + ' 条'"
+                    @change="toggleGroupSelect(itemsOf(row.subnet))"
+                  />
+                  <span class="g-chev">{{ collapsedSubnets.has(row.subnet.key) ? '▸' : '▾' }}</span>
+                  <span class="g-title">{{ row.subnet.label }}</span>
+                  <span class="g-chip">{{ row.subnet.hosts.length }} 台主机</span>
+                  <span class="g-chip">{{ row.subnet.count }} 条</span>
+                  <span class="g-tags">
+                    <span v-for="s in groupSummary(itemsOf(row.subnet))" :key="s.label" class="g-tag" :class="s.kind">
+                      {{ s.label }} {{ s.count }}
+                    </span>
+                  </span>
+                  <span v-if="collapsedSubnets.has(row.subnet.key)" class="g-preview mono">
+                    {{ portPreview(itemsOf(row.subnet)) }}
+                  </span>
+                </div>
+                <div
+                  v-else-if="row.type === 'host'"
+                  class="gt-group gt-lvl2"
+                  :class="{ 'is-collapsed': collapsedHosts.has(row.host.key) }"
+                  role="row"
+                  @click="toggleHost(row.host.key)"
+                >
+                  <GroupCheckbox
+                    class="grp-check"
+                    :checked="groupState(itemsOf(row.host)) === 'all'"
+                    :indeterminate="groupState(itemsOf(row.host)) === 'some'"
+                    :disabled="!itemsOf(row.host).length"
+                    :title="'选中该主机下全部 ' + itemsOf(row.host).length + ' 条'"
+                    @change="toggleGroupSelect(itemsOf(row.host))"
+                  />
+                  <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
+                  <span class="g-title">{{ row.host.title }}</span>
+                  <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
+                  <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
+                  <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
+                  <span class="g-tags">
+                    <span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">
+                      {{ s.label }} {{ s.count }}
+                    </span>
+                  </span>
+                  <span v-if="collapsedHosts.has(row.host.key)" class="g-preview mono">
+                    {{ portPreview(itemsOf(row.host)) }}
+                  </span>
+                </div>
                 <template v-else>
-                  <tr class="data-row" :class="{ selected: selected.has(row.item.id) }">
-                    <td class="cell-exp">
+                  <div class="gt-row" :class="{ selected: selected.has(row.item.id) }" role="row">
+                    <div class="gt-cell gt-sel">
                       <button
                         class="btn sm ghost exp"
                         :title="detailRows.has(row.item.id) ? '收起详情' : '展开详情'"
@@ -491,66 +479,56 @@ onMounted(() => {
                         {{ detailRows.has(row.item.id) ? '▾' : '▸' }}
                       </button>
                       <input type="checkbox" :checked="selected.has(row.item.id)" @change="toggleSelect(row.item.id)" />
-                    </td>
-                    <td>
+                    </div>
+                    <div class="gt-cell" data-label="状态">
                       <Badge :kind="portStatusInfo(row.item.status).kind">{{ portStatusInfo(row.item.status).label }}</Badge>
-                    </td>
-                    <td class="mono small nowrap">{{ row.item.host }}:{{ row.item.port }}</td>
-                    <td><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
-                    <td class="small">{{ row.item.service || '—' }}</td>
-                    <td class="small dim">{{ truncate(row.item.process, 30) || '—' }}</td>
-                    <td class="small mute">{{ truncate(row.item.banner, 42) || '—' }}</td>
-                    <td>
+                    </div>
+                    <div class="gt-cell gt-mono gt-nowrap" data-label="主机:端口">{{ row.item.host }}:{{ row.item.port }}</div>
+                    <div class="gt-cell" data-label="协议">
+                      <Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge>
+                    </div>
+                    <div class="gt-cell" data-label="服务">{{ row.item.service || '—' }}</div>
+                    <div class="gt-cell gt-dim" data-label="进程">{{ truncate(row.item.process, 30) || '—' }}</div>
+                    <div class="gt-cell gt-mute" data-label="指纹">{{ truncate(row.item.banner, 42) || '—' }}</div>
+                    <div class="gt-cell" data-label="标签">
                       <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
                       <span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span>
-                    </td>
-                    <td class="small mute nowrap">{{ fmtRelative(row.item.last_seen) }}</td>
-                    <td class="actions">
-                      <div class="cell-actions">
-                        <button
-                          v-if="!row.item.added"
-                          class="btn sm primary"
-                          :disabled="!canWrite() || busy['p' + row.item.id + 'add']"
-                          @click="decision(row.item, 'add')"
-                        >
-                          添加到列表
-                        </button>
-                        <button
-                          v-if="!row.item.ignored"
-                          class="btn sm"
-                          :disabled="!canWrite()"
-                          @click="decision(row.item, 'ignore')"
-                        >
-                          忽略
-                        </button>
-                        <button class="btn sm ghost" :disabled="!canWrite()" @click="openEditor(row.item)">备注</button>
-                        <button class="btn sm danger" :disabled="!canWrite()" @click="decision(row.item, 'delete')">删除</button>
-                      </div>
-                    </td>
-                  </tr>
-                  <tr v-if="detailRows.has(row.item.id)" class="detail-row">
-                    <td :colspan="10">
-                      <div class="row wrap" style="gap: 20px">
-                        <span class="small"><span class="mute">进程</span> <span class="mono">{{ row.item.process || '—' }}</span></span>
-                        <span class="small"><span class="mute">PID</span> <span class="mono">{{ row.item.pid || '—' }}</span></span>
-                        <span class="small"><span class="mute">服务</span> {{ row.item.service || '—' }}</span>
-                        <span class="small"><span class="mute">延迟</span> {{ row.item.latency_ms ? row.item.latency_ms + ' ms' : '—' }}</span>
-                        <span class="small"><span class="mute">最近发现</span> {{ fmtRelative(row.item.last_seen) }}</span>
-                        <span class="small"><span class="mute">来源规则</span> <span class="mono">{{ row.item.rule_id ? '#' + row.item.rule_id : '—' }}</span></span>
-                      </div>
-                      <div v-if="row.item.banner" class="small mono" style="margin-top: 6px">
-                        <span class="mute">指纹</span> {{ row.item.banner }}
-                      </div>
-                      <div v-if="row.item.tags && row.item.tags.length" class="row wrap" style="margin-top: 6px; gap: 6px">
-                        <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
-                      </div>
-                    </td>
-                  </tr>
+                    </div>
+                    <div class="gt-cell gt-mute gt-nowrap" data-label="最近发现">{{ fmtRelative(row.item.last_seen) }}</div>
+                    <div class="gt-cell gt-actions" data-label="操作">
+                      <button
+                        v-if="!row.item.added"
+                        class="btn sm primary"
+                        :disabled="!canWrite() || busy['p' + row.item.id + 'add']"
+                        @click="decision(row.item, 'add')"
+                      >
+                        添加到列表
+                      </button>
+                      <button v-if="!row.item.ignored" class="btn sm" :disabled="!canWrite()" @click="decision(row.item, 'ignore')">
+                        忽略
+                      </button>
+                      <button class="btn sm ghost" :disabled="!canWrite()" @click="openEditor(row.item)">备注</button>
+                      <button class="btn sm danger" :disabled="!canWrite()" @click="decision(row.item, 'delete')">删除</button>
+                    </div>                  </div>
+                  <div v-if="detailRows.has(row.item.id)" class="gt-detail">
+                    <div class="row wrap" style="gap: 20px">
+                      <span class="small"><span class="mute">进程</span> <span class="mono">{{ row.item.process || '—' }}</span></span>
+                      <span class="small"><span class="mute">PID</span> <span class="mono">{{ row.item.pid || '—' }}</span></span>
+                      <span class="small"><span class="mute">服务</span> {{ row.item.service || '—' }}</span>
+                      <span class="small"><span class="mute">延迟</span> {{ row.item.latency_ms ? row.item.latency_ms + ' ms' : '—' }}</span>
+                      <span class="small"><span class="mute">最近发现</span> {{ fmtRelative(row.item.last_seen) }}</span>
+                      <span class="small"><span class="mute">来源规则</span> <span class="mono">{{ row.item.rule_id ? '#' + row.item.rule_id : '—' }}</span></span>
+                    </div>
+                    <div v-if="row.item.banner" class="small mono" style="margin-top: 6px">
+                      <span class="mute">指纹</span> {{ row.item.banner }}
+                    </div>
+                    <div v-if="row.item.tags && row.item.tags.length" class="row wrap" style="margin-top: 6px; gap: 6px">
+                      <span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span>
+                    </div>
+                  </div>
                 </template>
               </template>
-            </tbody>
-          </table>
-        </div>
+            </div>
       </div>
     </div>
 
