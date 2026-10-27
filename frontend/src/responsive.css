@@ -556,8 +556,10 @@ table.data tbody tr.group-row > td {
 /* 组行内部是一条 flex 栏：复选框 + 箭头 + 标题 + 统计胶囊 + 折叠时的端口预览 */
 .grp {
   display: flex;
+  flex-wrap: nowrap; /* 换行会让「收起时多出的预览」把这一行撑高，造成跳动 */
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
   min-width: 0;
   padding: 8px 12px;
 }
@@ -628,11 +630,15 @@ table.data tbody tr.group-row > td {
   color: var(--info);
 }
 
+/* 折叠时出现的端口预览：始终单行、超出省略。它只占剩余空间，不改变行高。 */
 .g-preview {
+  flex: 1 1 auto;
+  min-width: 0;
   margin-left: auto;
   overflow: hidden;
   color: var(--text-mute);
   font-size: 11px;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -651,6 +657,8 @@ tr.subnet-row > td {
 }
 
 tr.subnet-row .grp {
+  /* 固定高度基线：展开与收起的状态内容不同，但这一条的高度必须不变 */
+  min-height: 40px;
   padding: 9px 12px 9px 9px;
   font-size: 12px;
 }
@@ -666,6 +674,7 @@ tr.host-row > td {
 }
 
 tr.host-row .grp {
+  min-height: 36px;
   padding: 7px 12px 7px 26px;
   font-size: 12px;
 }
@@ -744,15 +753,20 @@ td.cell-exp .exp:hover {
   }
 
   .grp {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 6px;
     padding: 8px 10px;
   }
 
+  /* 手机宽度下优先保住单行高度：分类统计让位，端口预览保留 */
+  .grp .g-tags {
+    display: none;
+  }
+
   .g-preview {
-    flex-basis: 100%;
-    margin-left: 0;
-    padding-left: 21px;
+    flex-basis: auto;
+    margin-left: auto;
+    padding-left: 0;
   }
 
   table.data[data-stack='1'] tbody tr.data-row > td:first-child,
