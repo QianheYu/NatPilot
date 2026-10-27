@@ -47,6 +47,8 @@ const selectedHosts = computed(() => hosts.value.filter((h) => selected.value.ha
 
 // 针对所选主机的端口扫描
 const scanOpen = ref(false)
+// 扫描目标：来自勾选（工具栏）或单行（行内「扫描端口」），与列表勾选解耦。
+const scanTargets = ref([])
 const scanForm = reactive({ ports_spec: '' })
 const scanning = ref(false)
 const scanRun = ref(null)
@@ -143,6 +145,16 @@ function openScan() {
     toastErr('请先在列表中选择要扫描的主机', '未选择主机')
     return
   }
+  startScanFor(selectedHosts.value)
+}
+
+// 行内「扫描端口」：只扫描这一台主机
+function openScanFor(host) {
+  startScanFor([host])
+}
+
+function startScanFor(targets) {
+  scanTargets.value = targets
   scanForm.ports_spec = ''
   scanRun.value = null
   scanPorts.value = []
@@ -158,14 +170,14 @@ function clearPoll() {
 }
 
 async function startScan() {
-  if (!selectedHosts.value.length) return
+  if (!scanTargets.value.length) return
   scanning.value = true
   clearPoll()
   try {
     const res = await api.startScan({
-      name: `扫描所选主机（${selectedHosts.value.length} 台）`,
+      name: `扫描所选主机（${scanTargets.value.length} 台）`,
       target_kind: 'hosts',
-      target_ref: selectedHosts.value.map((h) => h.ip).join(','),
+      target_ref: scanTargets.value.map((h) => h.ip).join(','),
       ports_spec: scanForm.ports_spec,
       apply_policy: false, // 结果交给用户挑选，不自动建规则
     })
@@ -341,12 +353,15 @@ onBeforeUnmount(clearPoll)
         共 {{ hosts.length }} 台主机 · 默认网关 {{ gateway || '未知' }} · 监控按 MAC 绑定，IP 变动自动跟随
       </span>
       <div class="spacer" style="flex: 1" />
-      <template v-if="selected.size">
-        <span class="badge accent">已选 {{ selected.size }} 台</span>
-        <button class="btn primary" :disabled="!canWrite() || scanning" @click="openScan">
-          <span v-if="scanning" class="spin">◌</span>扫描所选主机
-        </button>
-      </template>
+      <span v-if="selected.size" class="badge accent">已选 {{ selected.size }} 台</span>
+      <button
+        class="btn primary"
+        :disabled="!selected.size || !canWrite() || scanning"
+        :title="selected.size ? '扫描勾选的主机' : '请先勾选主机'"
+        @click="openScan"
+      >
+        <span v-if="scanning" class="spin">◌</span>扫描所选主机
+      </button>
       <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
       <button class="btn primary" :disabled="busy || !canWrite()" @click="discoverHosts">发现局域网主机</button>
     </div>
@@ -401,14 +416,24 @@ onBeforeUnmount(clearPoll)
                 <td class="small mute">{{ h.seen_count }}</td>
                 <td class="small mute nowrap">{{ fmtRelative(h.last_seen) }}</td>
                 <td>
-                  <button
-                    class="btn sm ghost"
-                    :disabled="!canWrite() || !h.mac"
-                    :title="h.mac ? '为此主机添加监控策略' : '该主机没有 MAC 地址，无法按 MAC 绑定监控'"
-                    @click="openMonitor(h)"
-                  >
-                    监控<span v-if="policyCount(h)" class="badge accent" style="margin-left: 6px">{{ policyCount(h) }}</span>
-                  </button>
+                  <div class="cell-actions">
+                    <button
+                      class="btn sm ghost"
+                      :disabled="!canWrite() || !h.mac"
+                      :title="h.mac ? '为此主机添加监控策略' : '该主机没有 MAC 地址，无法按 MAC 绑定监控'"
+                      @click="openMonitor(h)"
+                    >
+                      监控<span v-if="policyCount(h)" class="badge accent" style="margin-left: 6px">{{ policyCount(h) }}</span>
+                    </button>
+                    <button
+                      class="btn sm ghost"
+                      :disabled="!canWrite() || scanning"
+                      :title="`扫描 ${h.ip} 的开放端口`"
+                      @click="openScanFor(h)"
+                    >
+                      扫描端口
+                    </button>
+                  </div>
                 </td>
                 <td class="right">
                   <button class="btn sm ghost" :disabled="!canWrite()" @click="removeHost(h)">移除</button>
@@ -423,8 +448,8 @@ onBeforeUnmount(clearPoll)
     <!-- 扫描所选主机 -->
     <Modal v-if="scanOpen" title="扫描所选主机" wide @close="closeScan">
       <div class="small dim" style="margin-bottom: 12px">
-        目标（{{ selectedHosts.length }} 台）：
-        <span class="mono">{{ selectedHosts.map((h) => h.ip).join(', ') }}</span>
+        目标（{{ scanTargets.length }} 台）：
+        <span class="mono">{{ scanTargets.map((h) => h.ip).join(', ') }}</span>
       </div>
 
       <div class="row wrap" style="gap: 10px; align-items: flex-end">
