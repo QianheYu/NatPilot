@@ -59,7 +59,7 @@ Global flags:
   --port N           bind port for serve (default 8787)
   --mode MODE        auto|web|server|desktop (default auto)
   --auth BOOL        require login (web/server modes)
-  --log-level LEVEL  debug|info|warn|error
+  --log-level LEVEL  debug|info|warn|error|off (default off = 不记录)
   --log-format FMT   text|json
   --json             machine readable output
 

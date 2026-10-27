@@ -212,7 +212,8 @@ func Default() *Config {
 		TokenTTLHours:   720,
 	}
 	c.Log = Log{
-		Level:      "info",
+		// 默认不记录：日志与审计页在用户手动开启前保持为空。
+		Level:      "off",
 		Format:     "text",
 		MaxEntries: 5000,
 		Retention:  30,
@@ -662,8 +663,10 @@ func (c *Config) Validate() error {
 		c.Log.Level = l
 	case "warning":
 		c.Log.Level = "warn"
+	case "off", "none", "silent", "disabled":
+		c.Log.Level = "off"
 	default:
-		return fmt.Errorf("invalid log.level %q", c.Log.Level)
+		return fmt.Errorf("invalid log.level %q (debug|info|warn|error|off)", c.Log.Level)
 	}
 	switch f := strings.ToLower(strings.TrimSpace(c.Log.Format)); f {
 	case "", "text", "console":

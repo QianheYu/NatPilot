@@ -12,6 +12,7 @@ import (
 
 	"github.com/ekko-studio/natpilot/internal/bus"
 	"github.com/ekko-studio/natpilot/internal/config"
+	"github.com/ekko-studio/natpilot/internal/logging"
 	"github.com/ekko-studio/natpilot/internal/model"
 	"github.com/ekko-studio/natpilot/internal/netutil"
 	"github.com/ekko-studio/natpilot/internal/store"
@@ -786,6 +787,12 @@ func (s *Server) applySettingOverrides(kv map[string]string) (applied, restartRe
 		}
 		if serr := s.app.Store.SetSetting("config."+k, v); serr != nil {
 			return applied, restartRequired, unsupported, serr
+		}
+		// The log level is the one setting that must take effect immediately: the
+		// console offers "off" as the default, and toggling it has to stop (or
+		// start) both stderr output and the persisted event stream right away.
+		if k == "log.level" {
+			logging.Init(s.app.Config.Log.Level, s.app.Config.Log.Format)
 		}
 		applied = append(applied, k)
 	}

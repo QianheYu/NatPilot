@@ -232,6 +232,7 @@ onMounted(load)
             <label class="field">
               <span>日志级别</span>
               <select v-model="draft['log.level']" class="select">
+                <option value="off">off（不记录）</option>
                 <option value="debug">debug</option>
                 <option value="info">info</option>
                 <option value="warn">warn</option>

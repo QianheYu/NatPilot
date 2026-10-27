@@ -204,6 +204,10 @@ func (a *App) Shutdown() {
 
 // Publish implements mapper.Events and scanner.Events.
 func (a *App) Publish(category, message string, meta model.JSONMap) {
+	// 与 Store.AddEvent 同一约定：关闭日志时既不落库也不实时推送。
+	if logging.LevelOf() == "off" {
+		return
+	}
 	level := "info"
 	if category == "mapping" && strings.Contains(message, "failed") {
 		level = "warn"

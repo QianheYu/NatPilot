@@ -2,9 +2,9 @@ package store
 
 import (
 	"database/sql"
-	"time"
-
+	"github.com/ekko-studio/natpilot/internal/logging"
 	"github.com/ekko-studio/natpilot/internal/model"
+	"time"
 )
 
 const userCols = `id, username, display_name, email, role, enabled, password_hash, created_at, updated_at, last_login_at`
@@ -210,7 +210,14 @@ func (s *Store) ListAudit(limit, offset int) ([]model.AuditEntry, int, error) {
 // ---- events ----
 
 // AddEvent appends a system event.
+//
+// log.level=off means "不记录": the event log is part of what the operator asked
+// to stop recording, so mapper/scanner events must not slip past the logging gate
+// through this path either.
 func (s *Store) AddEvent(level, category, message string, meta model.JSONMap) error {
+	if logging.LevelOf() == "off" {
+		return nil
+	}
 	if meta == nil {
 		meta = model.JSONMap{}
 	}

@@ -25,6 +25,14 @@ type Record struct {
 // Hook receives every emitted record.
 type Hook func(Record)
 
+// LevelOff disables logging completely.
+//
+// It sits above slog.LevelError, so the level gate in emit() drops every record
+// before it reaches the writer or the hooks — which also means nothing is
+// persisted as a system event and nothing is streamed over SSE. That is the
+// documented meaning of log.level=off: "不要记录".
+const LevelOff = slog.Level(100)
+
 var (
 	mu     sync.RWMutex
 	logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -33,6 +41,7 @@ var (
 )
 
 // Init configures the process wide logger. format is one of text|json.
+// level=off silences everything; it is also the default (see config defaults).
 func Init(level, format string) {
 	lvl := ParseLevel(level)
 	out := io.Writer(os.Stderr)
@@ -62,6 +71,8 @@ func ParseLevel(s string) slog.Level {
 		return slog.LevelWarn
 	case "error", "err":
 		return slog.LevelError
+	case "off", "none", "silent", "disabled", "false":
+		return LevelOff
 	default:
 		return slog.LevelInfo
 	}
@@ -71,6 +82,9 @@ func ParseLevel(s string) slog.Level {
 func LevelOf() string {
 	mu.RLock()
 	defer mu.RUnlock()
+	if minLvl >= LevelOff {
+		return "off"
+	}
 	return strings.ToLower(minLvl.String())
 }
 
