@@ -1,11 +1,11 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
 import { toastOk, toastErr, canWrite } from '../store'
-import { fmtRelative } from '../utils/format'
+import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
 
 const loading = ref(true)
 const hosts = ref([])
@@ -28,6 +28,50 @@ const form = reactive({
   note: '',
 })
 
+// ---- 选择的「主机」与「扫描结果端口」----
+const selected = ref(new Set())
+const allSelected = computed(() => hosts.value.length > 0 && selected.value.size === hosts.value.length)
+
+function toggleSelect(id) {
+  const next = new Set(selected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selected.value = next
+}
+
+function toggleSelectAll() {
+  selected.value = allSelected.value ? new Set() : new Set(hosts.value.map((h) => h.id))
+}
+
+const selectedHosts = computed(() => hosts.value.filter((h) => selected.value.has(h.id)))
+
+// 针对所选主机的端口扫描
+const scanOpen = ref(false)
+const scanForm = reactive({ ports_spec: '' })
+const scanning = ref(false)
+const scanRun = ref(null)
+const scanPorts = ref([])
+const portSel = ref(new Set())
+const actionBusy = reactive({ rules: false, policy: false })
+const policyAction = ref('watch')
+let pollTimer = null
+
+const selectedPorts = computed(() => scanPorts.value.filter((p) => portSel.value.has(p.id)))
+const allPortsSelected = computed(
+  () => scanPorts.value.length > 0 && portSel.value.size === scanPorts.value.length,
+)
+
+function togglePort(id) {
+  const next = new Set(portSel.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  portSel.value = next
+}
+
+function toggleAllPorts() {
+  portSel.value = allPortsSelected.value ? new Set() : new Set(scanPorts.value.map((p) => p.id))
+}
+
 // normMAC mirrors the server-side normalisation: the MAC is the identity, so
 // "AA-BB-.." and "aa:bb:.." must group together.
 function normMAC(mac) {
@@ -44,8 +88,6 @@ const policyCounts = computed(() => {
   return out
 })
 
-// Policies of the host whose monitoring dialog is open. A host can have several:
-// e.g. one that adds 22, another that only watches 80/443.
 const openPolicies = computed(() => {
   if (!monitorHost.value || !monitorHost.value.mac) return []
   const key = normMAC(monitorHost.value.mac)
@@ -60,11 +102,7 @@ function policyCount(h) {
 async function load() {
   loading.value = true
   try {
-    const [h, n, p] = await Promise.all([
-      api.hosts({ limit: 800 }),
-      api.interfaces(),
-      api.policies(),
-    ])
+    const [h, n, p] = await Promise.all([api.hosts({ limit: 800 }), api.interfaces(), api.policies()])
     hosts.value = h.hosts || []
     interfaces.value = n.interfaces || []
     gateway.value = n.gateway || ''
@@ -98,6 +136,154 @@ async function removeHost(h) {
   }
 }
 
+// ---- 扫描所选主机 ----
+
+function openScan() {
+  if (!selectedHosts.value.length) {
+    toastErr('请先在列表中选择要扫描的主机', '未选择主机')
+    return
+  }
+  scanForm.ports_spec = ''
+  scanRun.value = null
+  scanPorts.value = []
+  portSel.value = new Set()
+  scanOpen.value = true
+}
+
+function clearPoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function startScan() {
+  if (!selectedHosts.value.length) return
+  scanning.value = true
+  clearPoll()
+  try {
+    const res = await api.startScan({
+      name: `扫描所选主机（${selectedHosts.value.length} 台）`,
+      target_kind: 'hosts',
+      target_ref: selectedHosts.value.map((h) => h.ip).join(','),
+      ports_spec: scanForm.ports_spec,
+      apply_policy: false, // 结果交给用户挑选，不自动建规则
+    })
+    scanRun.value = res.scan || null
+    pollScan(res.scan && res.scan.id)
+  } catch (err) {
+    scanning.value = false
+    toastErr(err.message, '扫描启动失败')
+  }
+}
+
+// pollScan waits for the scan to finish, then loads the discovered ports.
+function pollScan(id) {
+  if (!id) {
+    scanning.value = false
+    return
+  }
+  pollTimer = setTimeout(async () => {
+    try {
+      const res = await api.scan(id)
+      scanRun.value = res.scan || scanRun.value
+      const status = (res.scan || {}).status
+      if (status === 'running') {
+        pollScan(id)
+        return
+      }
+      const ports = await api.scanResults(id, { limit: 500 })
+      scanPorts.value = ports.ports || []
+      portSel.value = new Set(scanPorts.value.map((p) => p.id))
+      scanning.value = false
+      if (status === 'failed') {
+        toastErr((res.scan || {}).message || '扫描失败', '扫描失败')
+      } else if (!scanPorts.value.length) {
+        toastOk('扫描完成，没有发现开放端口')
+      } else {
+        toastOk(`扫描完成，发现 ${scanPorts.value.length} 个开放端口`)
+      }
+    } catch (err) {
+      scanning.value = false
+      toastErr(err.message, '获取扫描结果失败')
+    }
+  }, 1200)
+}
+
+function closeScan() {
+  clearPoll()
+  scanning.value = false
+  scanOpen.value = false
+}
+
+// ---- 对选中的端口执行动作 ----
+
+async function addToRules() {
+  const ports = selectedPorts.value
+  if (!ports.length) {
+    toastErr('请先勾选端口', '未选择端口')
+    return
+  }
+  actionBusy.rules = true
+  try {
+    const res = await api.addPorts({ ids: ports.map((p) => p.id) })
+    toastOk(`已添加 ${res.added} 条映射规则${res.failed ? `，${res.failed} 条失败` : ''}`)
+    await load()
+    portSel.value = new Set()
+  } catch (err) {
+    toastErr(err.message, '添加映射规则失败')
+  } finally {
+    actionBusy.rules = false
+  }
+}
+
+// createPolicies groups the selected ports per host and creates one host-bound
+// policy (keyed by MAC) for each host, so DHCP address changes keep working.
+async function createPolicies() {
+  const ports = selectedPorts.value
+  if (!ports.length) {
+    toastErr('请先勾选端口', '未选择端口')
+    return
+  }
+  const byHost = new Map()
+  for (const p of ports) {
+    if (!byHost.has(p.host)) byHost.set(p.host, [])
+    byHost.get(p.host).push(p.port)
+  }
+  const hostByIP = new Map(hosts.value.map((h) => [h.ip, h]))
+  let created = 0
+  let skipped = 0
+  actionBusy.policy = true
+  try {
+    for (const [ip, portList] of byHost) {
+      const host = hostByIP.get(ip)
+      if (!host || !host.mac) {
+        skipped++
+        continue
+      }
+      const ranges = [...new Set(portList)].sort((a, b) => a - b).join(',')
+      await api.createHostPolicy(host.id, {
+        name: `监控 ${host.hostname || host.ip}`,
+        port_ranges: ranges,
+        protocol: 'tcp',
+        auto_action: policyAction.value,
+        auto_add: policyAction.value === 'add',
+      })
+      created++
+    }
+    if (created) toastOk(`已为 ${created} 台主机生成监控策略`)
+    if (skipped) toastErr(`${skipped} 台主机缺少 MAC 地址，未能生成策略（请先执行主机发现）`, '部分未生成')
+    await load()
+    portSel.value = new Set()
+  } catch (err) {
+    toastErr(err.message, '生成监控策略失败')
+  } finally {
+    actionBusy.policy = false
+  }
+}
+
+// ---- 单机监控策略弹窗 ----
+
 function openMonitor(h) {
   monitorHost.value = h
   Object.assign(form, { name: '', port_ranges: '', protocol: 'any', auto_action: 'watch', priority: 0, note: '' })
@@ -107,8 +293,6 @@ function closeMonitor() {
   monitorHost.value = null
 }
 
-// addPolicy() adds one more policy to the same host and keeps the dialog open,
-// so a host can be given several rules in one go.
 async function addPolicy() {
   if (!monitorHost.value) return
   saving.value = true
@@ -147,16 +331,22 @@ async function removePolicy(p) {
 const actionLabel = (a) => ({ add: '自动添加映射', watch: '仅监控', ignore: '忽略', delete: '删除' })[a] || a
 
 onMounted(load)
+onBeforeUnmount(clearPoll)
 </script>
 
 <template>
   <div>
     <div class="toolbar">
       <span class="dim small">
-        共 {{ hosts.length }} 台主机 · 默认网关 {{ gateway || '未知' }} ·
-        主机的 IP 可能随 DHCP 变动，监控按 MAC 绑定并自动跟随 IP
+        共 {{ hosts.length }} 台主机 · 默认网关 {{ gateway || '未知' }} · 监控按 MAC 绑定，IP 变动自动跟随
       </span>
       <div class="spacer" style="flex: 1" />
+      <template v-if="selected.size">
+        <span class="badge accent">已选 {{ selected.size }} 台</span>
+        <button class="btn primary" :disabled="!canWrite() || scanning" @click="openScan">
+          <span v-if="scanning" class="spin">◌</span>扫描所选主机
+        </button>
+      </template>
       <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
       <button class="btn primary" :disabled="busy || !canWrite()" @click="discoverHosts">发现局域网主机</button>
     </div>
@@ -180,6 +370,9 @@ onMounted(load)
           <table class="data">
             <thead>
               <tr>
+                <th style="width: 34px">
+                  <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" />
+                </th>
                 <th>IP</th>
                 <th>MAC</th>
                 <th>厂商</th>
@@ -193,7 +386,8 @@ onMounted(load)
               </tr>
             </thead>
             <tbody>
-              <tr v-for="h in hosts" :key="h.id">
+              <tr v-for="h in hosts" :key="h.id" :class="{ selected: selected.has(h.id) }">
+                <td><input type="checkbox" :checked="selected.has(h.id)" @change="toggleSelect(h.id)" /></td>
                 <td class="mono small">{{ h.ip }}</td>
                 <td class="mono small mute">{{ h.mac || '—' }}</td>
                 <td class="small">{{ h.vendor || '—' }}</td>
@@ -226,6 +420,93 @@ onMounted(load)
       </div>
     </div>
 
+    <!-- 扫描所选主机 -->
+    <Modal v-if="scanOpen" title="扫描所选主机" wide @close="closeScan">
+      <div class="small dim" style="margin-bottom: 12px">
+        目标（{{ selectedHosts.length }} 台）：
+        <span class="mono">{{ selectedHosts.map((h) => h.ip).join(', ') }}</span>
+      </div>
+
+      <div class="row wrap" style="gap: 10px; align-items: flex-end">
+        <label class="field" style="flex: 1 1 320px">
+          <span>端口范围</span>
+          <input v-model="scanForm.ports_spec" class="input" placeholder="留空使用默认端口集；例如 22,80,443,8000-8100" />
+        </label>
+        <button class="btn primary" :disabled="scanning || !canWrite()" @click="startScan">
+          <span v-if="scanning" class="spin">◌</span>{{ scanning ? '扫描中…' : '开始扫描' }}
+        </button>
+      </div>
+
+      <div v-if="scanRun" class="small dim" style="margin-top: 10px">
+        扫描 #{{ scanRun.id }} · 状态 {{ scanRun.status }} · 开放 {{ scanRun.open_count || 0 }}
+        <span v-if="scanRun.message"> · {{ scanRun.message }}</span>
+      </div>
+
+      <div v-if="scanPorts.length" style="margin-top: 14px">
+        <div class="row" style="margin-bottom: 8px">
+          <span class="small mute">发现 {{ scanPorts.length }} 个端口，已勾选 {{ portSel.size }} 个</span>
+          <div class="spacer" style="flex: 1" />
+          <button class="btn sm" @click="toggleAllPorts">{{ allPortsSelected ? '取消全选' : '全选' }}</button>
+        </div>
+        <div class="table-wrap" style="max-height: 46vh; overflow-y: auto">
+          <table class="data">
+            <thead>
+              <tr>
+                <th style="width: 34px"></th>
+                <th>主机:端口</th>
+                <th>协议</th>
+                <th>服务</th>
+                <th>状态</th>
+                <th>指纹</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in scanPorts" :key="p.id" :class="{ selected: portSel.has(p.id) }">
+                <td><input type="checkbox" :checked="portSel.has(p.id)" @change="togglePort(p.id)" /></td>
+                <td class="mono small nowrap">{{ p.host }}:{{ p.port }}</td>
+                <td>
+                  <Badge :kind="protocolTag(p.protocol).kind">{{ protocolTag(p.protocol).label }}</Badge>
+                </td>
+                <td class="small">{{ p.service || '—' }}</td>
+                <td>
+                  <Badge :kind="portStatusInfo(p.status).kind">{{ portStatusInfo(p.status).label }}</Badge>
+                </td>
+                <td class="small mute">{{ truncate(p.banner, 40) || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="row wrap" style="margin-top: 12px; gap: 10px; align-items: center">
+          <select v-model="policyAction" class="select" style="width: 220px">
+            <option value="watch">生成「仅监控」策略</option>
+            <option value="add">生成「自动添加映射」策略</option>
+          </select>
+          <button class="btn" :disabled="actionBusy.policy || !portSel.size || !canWrite()" @click="createPolicies">
+            <span v-if="actionBusy.policy" class="spin">◌</span>生成监控策略（{{ selectedPorts.length }}）
+          </button>
+          <button class="btn primary" :disabled="actionBusy.rules || !portSel.size || !canWrite()" @click="addToRules">
+            <span v-if="actionBusy.rules" class="spin">◌</span>添加到映射规则（{{ selectedPorts.length }}）
+          </button>
+        </div>
+        <div class="small dim" style="margin-top: 6px">
+          生成监控策略会按 MAC 绑定主机（同一主机的多个端口合并为一条策略），IP 变化后仍有效；
+          添加到映射规则会为每个端口立即创建一条映射。
+        </div>
+      </div>
+      <div v-else-if="!scanning && scanRun && scanRun.status !== 'running'" class="mute small" style="margin-top: 14px">
+        本次扫描没有发现开放端口。可以调整端口范围后重新扫描。
+      </div>
+
+      <template #footer>
+        <button class="btn ghost" @click="closeScan">关闭</button>
+        <button class="btn" :disabled="scanning || !canWrite()" @click="startScan">
+          <span v-if="scanning" class="spin">◌</span>重新扫描
+        </button>
+      </template>
+    </Modal>
+
+    <!-- 单机监控策略 -->
     <Modal v-if="monitorHost" title="添加监控" @close="closeMonitor">
       <div class="small dim" style="margin-bottom: 12px">
         按 MAC <span class="mono">{{ monitorHost.mac }}</span> 绑定，当前 IP

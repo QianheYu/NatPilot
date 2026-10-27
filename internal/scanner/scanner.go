@@ -194,13 +194,16 @@ func (s *Scanner) prepare(req Request) (*model.ScanRun, error) {
 		req.TargetKind = model.ScanTargetLocal
 	}
 	switch req.TargetKind {
-	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote, model.ScanTargetMAC:
+	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote, model.ScanTargetMAC, model.ScanTargetHosts:
 	default:
 		return nil, fmt.Errorf("invalid target kind %q", req.TargetKind)
 	}
 	if req.TargetKind != model.ScanTargetLocal && strings.TrimSpace(req.TargetRef) == "" {
 		if req.TargetKind == model.ScanTargetMAC {
 			return nil, errors.New("至少需要一个 MAC 地址（可用 aa:bb:cc:dd:ee:ff 或前缀 aa:bb:cc）")
+		}
+		if req.TargetKind == model.ScanTargetHosts {
+			return nil, errors.New("至少需要一个主机地址")
 		}
 		return nil, errors.New("target CIDR is required for network scans")
 	}
@@ -256,6 +259,8 @@ func (s *Scanner) execute(ctx context.Context, run *model.ScanRun, req Request) 
 		ports, err = s.scanNetwork(ctx, run, req)
 	case model.ScanTargetMAC:
 		ports, err = s.scanByMAC(ctx, run, req)
+	case model.ScanTargetHosts:
+		ports, err = s.scanHostList(ctx, run, req)
 	}
 	duration := time.Since(start)
 
@@ -460,20 +465,70 @@ func (s *Scanner) scanByMAC(ctx context.Context, run *model.ScanRun, req Request
 
 	logging.Info("scanner", "resolved MAC target", "patterns", req.TargetRef, "hosts", len(matched))
 
+	ips := make([]string, 0, len(matched))
+	for _, h := range matched {
+		ips = append(ips, h.IP)
+	}
+	return s.scanIPList(ctx, run, req, ips)
+}
+
+// ParseHostList splits the comma/space separated address list used by a
+// "hosts" scan, keeping only valid IPv4/IPv6 literals.
+func ParseHostList(spec string, max int) ([]string, error) {
+	fields := strings.FieldsFunc(spec, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '|'
+	})
+	out := make([]string, 0, len(fields))
+	seen := map[string]bool{}
+	for _, f := range fields {
+		ip := strings.TrimSpace(f)
+		if ip == "" {
+			continue
+		}
+		if net.ParseIP(ip) == nil {
+			return nil, fmt.Errorf("不是有效的 IP 地址: %q", ip)
+		}
+		if seen[ip] {
+			continue
+		}
+		seen[ip] = true
+		out = append(out, ip)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("至少需要一个主机地址")
+	}
+	if max > 0 && len(out) > max {
+		return nil, fmt.Errorf("最多一次扫描 %d 台主机，当前 %d 台", max, len(out))
+	}
+	return out, nil
+}
+
+// scanHostList scans exactly the addresses the user picked in the host list.
+func (s *Scanner) scanHostList(ctx context.Context, run *model.ScanRun, req Request) ([]model.DiscoveredPort, error) {
+	ips, err := ParseHostList(req.TargetRef, 512)
+	if err != nil {
+		return nil, err
+	}
+	logging.Info("scanner", "scanning selected hosts", "count", len(ips))
+	return s.scanIPList(ctx, run, req, ips)
+}
+
+// scanIPList runs a /32 scan per address and merges the results.
+func (s *Scanner) scanIPList(ctx context.Context, run *model.ScanRun, req Request, ips []string) ([]model.DiscoveredPort, error) {
 	out := []model.DiscoveredPort{}
 	var lastErr error
-	for _, h := range matched {
+	for _, ip := range ips {
 		if ctx.Err() != nil {
 			break
 		}
 		sub := req
 		sub.TargetKind = model.ScanTargetCIDR
-		sub.TargetRef = h.IP + "/32"
+		sub.TargetRef = ip + "/32"
 		sub.SkipLANCheck = true
 		ports, serr := s.scanNetwork(ctx, run, sub)
 		if serr != nil {
 			lastErr = serr
-			logging.Warn("scanner", "MAC target scan failed", "host", h.IP, "mac", h.MAC, "error", serr.Error())
+			logging.Warn("scanner", "host scan failed", "host", ip, "error", serr.Error())
 			continue
 		}
 		out = append(out, ports...)

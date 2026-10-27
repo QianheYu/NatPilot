@@ -34,6 +34,9 @@ const (
 	// the address is looked up when the scan starts, so a device that got a new
 	// DHCP lease is still scanned.
 	ScanTargetMAC = "mac"
+	// ScanTargetHosts scans an explicit list of addresses (the hosts selected in
+	// the host list). Unlike a CIDR sweep it never touches anything else.
+	ScanTargetHosts = "hosts"
 )
 
 // Scan run status values.

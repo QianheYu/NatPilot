@@ -68,9 +68,9 @@ func (s *Server) buildScanRequest(req scanRequest, trigger string) (scanner.Requ
 		kind = model.ScanTargetLocal
 	}
 	switch kind {
-	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote, model.ScanTargetMAC:
+	case model.ScanTargetLocal, model.ScanTargetCIDR, model.ScanTargetRemote, model.ScanTargetMAC, model.ScanTargetHosts:
 	default:
-		return scanner.Request{}, fmt.Errorf("target_kind must be local, cidr, remote or mac")
+		return scanner.Request{}, fmt.Errorf("target_kind must be local, cidr, remote, mac or hosts")
 	}
 	if kind == model.ScanTargetMAC {
 		patterns := model.ParseMACPatterns(req.TargetRef)
@@ -95,6 +95,10 @@ func (s *Server) buildScanRequest(req scanRequest, trigger string) (scanner.Requ
 		if matched == 0 {
 			return scanner.Request{}, fmt.Errorf(
 				"没有主机匹配 MAC 范围 %q，请先执行一次“发现局域网主机”以刷新 MAC/IP 对应关系", req.TargetRef)
+		}
+	} else if kind == model.ScanTargetHosts {
+		if _, herr := scanner.ParseHostList(req.TargetRef, 512); herr != nil {
+			return scanner.Request{}, herr
 		}
 	} else if kind != model.ScanTargetLocal && strings.TrimSpace(req.TargetRef) == "" {
 		return scanner.Request{}, fmt.Errorf("target_ref (CIDR) is required for network scans")
@@ -157,7 +161,17 @@ func (s *Server) handleScanPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	warnings := []string{}
 	hosts := 1
-	if sc.TargetKind == model.ScanTargetMAC {
+	if sc.TargetKind == model.ScanTargetHosts {
+		ips, herr := scanner.ParseHostList(sc.TargetRef, 512)
+		if herr != nil {
+			writeError(w, http.StatusBadRequest, herr.Error())
+			return
+		}
+		hosts = len(ips)
+		out["hosts"] = hosts
+		out["host_list"] = ips
+		out["target_preview"] = ips[:min(len(ips), 32)]
+	} else if sc.TargetKind == model.ScanTargetMAC {
 		// Preview a MAC scan by resolving the patterns to the addresses those
 		// devices hold right now — exactly what the scan itself will do.
 		patterns := model.ParseMACPatterns(sc.TargetRef)
