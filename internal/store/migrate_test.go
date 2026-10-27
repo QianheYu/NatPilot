@@ -147,3 +147,40 @@ func TestMigrateCollapsesDuplicateMACHosts(t *testing.T) {
 		t.Fatalf("kept the wrong address %q, want the freshest lease", kept.IP)
 	}
 }
+
+// TestMigrateFixesLegacyHostMatchTarget guards the data repair: early builds
+// stored match_target='host' for MAC-bound policies, a value the UI cannot show
+// (it is not one of any/local/cidr/remote/mac).
+func TestMigrateFixesLegacyHostMatchTarget(t *testing.T) {
+	st := newTestStore(t)
+
+	// CreatePolicy does not validate the kind, so this mimics the old row.
+	id, err := st.CreatePolicy(&model.Policy{
+		Name: "legacy host policy", MAC: "aa:bb:cc:dd:ee:10",
+		MatchTarget: "host", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create legacy policy: %v", err)
+	}
+
+	if err := st.Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	p, err := st.GetPolicy(id)
+	if err != nil || p == nil {
+		t.Fatalf("get policy: %v %v", p, err)
+	}
+	if p.MatchTarget != model.ScanTargetMAC {
+		t.Fatalf("match_target = %q, want %q", p.MatchTarget, model.ScanTargetMAC)
+	}
+	// A global policy must keep its own kind.
+	gid, _ := st.CreatePolicy(&model.Policy{Name: "global", MatchTarget: "any", Enabled: true})
+	if err := st.Migrate(); err != nil {
+		t.Fatalf("migrate again: %v", err)
+	}
+	g, _ := st.GetPolicy(gid)
+	if g.MatchTarget != "any" {
+		t.Fatalf("global policy kind changed to %q", g.MatchTarget)
+	}
+}

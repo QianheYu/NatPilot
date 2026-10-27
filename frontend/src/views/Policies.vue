@@ -136,6 +136,9 @@ async function toggleMonitor() {
   }
 }
 
+const targetKindLabel = (k) =>
+  ({ any: '任意', local: '本机', cidr: '网段', remote: '远端', mac: '主机 MAC' })[k] || k || '未设置'
+
 const autoActionLabel = (a) => ({ add: '自动添加', watch: '仅观察', ignore: '忽略', delete: '删除记录' })[a] || a
 
 onMounted(load)
@@ -210,7 +213,7 @@ onMounted(load)
                   <div class="small mute">{{ p.description || '' }}</div>
                 </td>
                 <td>
-                  <Badge>{{ p.match_target_kind }}</Badge>
+                  <Badge>{{ targetKindLabel(p.match_target_kind) }}</Badge>
                   <div v-if="p.mac_patterns" class="mono small mute">{{ p.mac_patterns }}</div>
                   <div v-else-if="p.mac" class="mono small mute">绑定 {{ p.mac }}</div>
                 </td>
@@ -261,6 +264,10 @@ onMounted(load)
             <option value="local">本机</option>
             <option value="cidr">网段 / 局域网</option>
             <option value="mac">MAC 地址 / 前缀</option>
+            <!-- 历史或未知类型：显示原值而不是让下拉变成空白 -->
+            <option v-if="!['any', 'local', 'cidr', 'remote', 'mac'].includes(form.match_target_kind)" :value="form.match_target_kind">
+              {{ form.match_target_kind || '（未设置）' }}
+            </option>
           </select>
         </label>
         <label v-if="form.match_target_kind === 'mac'" class="field">

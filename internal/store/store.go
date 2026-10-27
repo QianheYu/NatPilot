@@ -323,6 +323,9 @@ var postMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS ix_policies_mac ON policies(mac)`,
 	// Policies that match a group of devices by hardware address.
 	`ALTER TABLE policies ADD COLUMN mac_patterns TEXT NOT NULL DEFAULT ''`,
+	// 早期版本把"按主机(MAC)绑定"的策略写成 match_target='host'，而合法类型只有
+	// any/local/cidr/remote/mac。统一修正，避免界面出现无法选中的空值。
+	`UPDATE policies SET match_target='mac' WHERE mac <> '' AND match_target NOT IN ('any','local','cidr','remote','mac')`,
 	// A device that moved to a new DHCP lease used to be stored twice. Keep the
 	// most recently seen row per MAC before the address becomes its own identity,
 	// otherwise the unique index below cannot be created.

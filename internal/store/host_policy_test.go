@@ -105,14 +105,14 @@ func TestHostPoliciesByMAC(t *testing.T) {
 	}
 
 	ssh, err := st.CreatePolicy(&model.Policy{
-		Name: "camera ssh", MAC: host.MAC, MatchTarget: "host",
+		Name: "camera ssh", MAC: host.MAC, MatchTarget: model.ScanTargetMAC,
 		PortRanges: "22", Protocol: "tcp", AutoAction: model.ActionAdd, Priority: 5, Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create policy 1: %v", err)
 	}
 	web, err := st.CreatePolicy(&model.Policy{
-		Name: "camera web", MAC: host.MAC, MatchTarget: "host",
+		Name: "camera web", MAC: host.MAC, MatchTarget: model.ScanTargetMAC,
 		PortRanges: "80,443", Protocol: "tcp", AutoAction: model.ActionWatch, Enabled: true,
 	})
 	if err != nil {

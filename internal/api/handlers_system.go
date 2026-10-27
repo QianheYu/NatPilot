@@ -333,10 +333,12 @@ func (s *Server) handleCreateHostPolicy(w http.ResponseWriter, r *http.Request) 
 	}
 
 	p := &model.Policy{
-		Name:          name,
-		Description:   req.Description,
-		Enabled:       true,
-		MatchTarget:   "host",
+		Name:        name,
+		Description: req.Description,
+		Enabled:     true,
+		// "mac" 是合法的匹配类型：主机策略本身按 MAC 绑定，把它写成 "host" 会让
+		// 列表显示一个不存在的类型、编辑弹窗的下拉也选不中(显示空白)。
+		MatchTarget:   model.ScanTargetMAC,
 		PortRanges:    strings.TrimSpace(req.PortRanges),
 		ExcludeRanges: req.ExcludeRanges,
 		Protocol:      orDefault(strings.TrimSpace(req.Protocol), "any"),
