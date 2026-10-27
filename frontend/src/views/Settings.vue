@@ -13,7 +13,8 @@ const cfg = ref({})
 const overrides = ref({})
 const busy = reactive({})
 const draft = reactive({
-  'log.level': '',
+  // 默认与后端一致：不记录。API 返回当前值时会被覆盖。
+  'log.level': 'off',
   'mapper.dry_run': false,
   'mapper.enabled': true,
   'mapper.default_lease_seconds': 86400,
