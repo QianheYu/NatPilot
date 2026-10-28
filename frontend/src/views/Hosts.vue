@@ -5,7 +5,8 @@ import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
 import PolicyFields from '../components/PolicyFields.vue'
-import { toastOk, toastErr, canWrite } from '../store'
+import Switch from '../components/Switch.vue'
+import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
 
 const loading = ref(true)
@@ -69,7 +70,9 @@ const scanRun = ref(null)
 const scanPorts = ref([])
 const portSel = ref(new Set())
 const actionBusy = reactive({ rules: false, policy: false })
-const policyAction = ref('watch')
+// 生成策略对话框：扫描结果可能跨多台主机，先弹窗让用户确认/修改字段。
+const policyTargets = ref([]) // [{ host, ports: number[] }]
+const applyToAll = ref(false)
 let pollTimer = null
 
 const selectedPorts = computed(() => scanPorts.value.filter((p) => portSel.value.has(p.id)))
@@ -242,6 +245,23 @@ function closeScan() {
   scanOpen.value = false
 }
 
+// refreshScanResults reloads the result rows of the current scan so that the
+// 状态 column reflects what just happened (已添加 / 已忽略 …). Without it the
+// list keeps showing the snapshot taken when the scan finished.
+async function refreshScanResults() {
+  const id = scanRun.value && scanRun.value.id
+  if (!id) return
+  try {
+    const res = await api.scanResults(id, { limit: 500 })
+    scanPorts.value = res.ports || []
+    // Keep the previous selection, but drop rows that disappeared.
+    const ids = new Set(scanPorts.value.map((p) => p.id))
+    portSel.value = new Set([...portSel.value].filter((x) => ids.has(x)))
+  } catch {
+    /* the list is advisory; a failed refresh must not break the action result */
+  }
+}
+
 // ---- 对选中的端口执行动作 ----
 
 async function addToRules() {
@@ -251,21 +271,31 @@ async function addToRules() {
     return
   }
   actionBusy.rules = true
+  // 乐观更新：下发映射要等网关，接口可能要好几秒；先把勾选行标成「已添加」，
+  // 失败再回滚。否则用户会以为点了没反应。
+  const ids = ports.map((p) => p.id)
+  const snapshot = scanPorts.value
+  const touched = new Set(ids)
+  scanPorts.value = scanPorts.value.map((p) =>
+    touched.has(p.id) ? { ...p, added: true, status: 'added' } : p,
+  )
   try {
-    const res = await api.addPorts({ ids: ports.map((p) => p.id) })
+    const res = await api.addPorts({ ids })
     toastOk(`已添加 ${res.added} 条映射规则${res.failed ? `，${res.failed} 条失败` : ''}`)
-    await load()
     portSel.value = new Set()
+    await Promise.all([load(), refreshScanResults()])
   } catch (err) {
+    scanPorts.value = snapshot // 失败回滚
     toastErr(err.message, '添加映射规则失败')
   } finally {
     actionBusy.rules = false
   }
 }
 
-// createPolicies groups the selected ports per host and creates one host-bound
-// policy (keyed by MAC) for each host, so DHCP address changes keep working.
-async function createPolicies() {
+// openPolicyDialog prepares one host-bound policy per host that owns a selected
+// port, then shows the same field set as the policy page so the user can review
+// and adjust everything before it is created (defaults are pre-filled).
+function openPolicyDialog() {
   const ports = selectedPorts.value
   if (!ports.length) {
     toastErr('请先勾选端口', '未选择端口')
@@ -277,44 +307,44 @@ async function createPolicies() {
     byHost.get(p.host).push(p.port)
   }
   const hostByIP = new Map(hosts.value.map((h) => [h.ip, h]))
-  let created = 0
-  let skipped = 0
-  actionBusy.policy = true
-  try {
-    for (const [ip, portList] of byHost) {
-      const host = hostByIP.get(ip)
-      if (!host || !host.mac) {
-        skipped++
-        continue
-      }
-      const ranges = [...new Set(portList)].sort((a, b) => a - b).join(',')
-      // 与单机弹窗/策略页保持同一份字段语义：mac 匹配 + 自动填入主机 MAC。
-      await api.createHostPolicy(host.id, {
-        name: `监控 ${host.hostname || host.ip}`,
-        match_target_kind: 'mac',
-        mac_patterns: host.mac,
-        port_ranges: ranges,
-        protocol: 'tcp',
-        auto_action: policyAction.value,
-        auto_add: policyAction.value === 'add',
-      })
-      created++
-    }
-    if (created) toastOk(`已为 ${created} 台主机生成监控策略`)
-    if (skipped) toastErr(`${skipped} 台主机缺少 MAC 地址，未能生成策略（请先执行主机发现）`, '部分未生成')
-    await load()
-    portSel.value = new Set()
-  } catch (err) {
-    toastErr(err.message, '生成监控策略失败')
-  } finally {
-    actionBusy.policy = false
+  const targets = []
+  let missingMac = 0
+  for (const [ip, portList] of byHost) {
+    const host = hostByIP.get(ip) || { id: 0, ip, mac: '', hostname: '' }
+    if (!host.mac) missingMac++
+    targets.push({ host, ports: [...new Set(portList)].sort((a, b) => a - b) })
   }
+  if (!targets.length) {
+    toastErr('没有可用的主机信息', '无法生成策略')
+    return
+  }
+  if (missingMac) {
+    // 仍然打开对话框：让用户自己填 MAC 前缀（例如主机尚未做发现、或回环地址），
+    // 否则这里直接拒绝，用户就没有任何补救入口。
+    toastWarn(
+      `${missingMac} 台主机没有 MAC 地址，请在对话框里填写「MAC 地址 / 前缀」，否则该策略不会匹配任何主机`,
+      '需要补充匹配条件',
+    )
+  }
+  policyTargets.value = targets
+  applyToAll.value = targets.length > 1
+  const first = targets[0]
+  monitorHost.value = first.host
+  Object.assign(form, emptyPolicyForm(), {
+    name: targets.length > 1 ? `监控 ${targets.length} 台主机` : `监控 ${first.host.hostname || first.host.ip}`,
+    match_target_kind: 'mac',
+    mac_patterns: first.host.mac || '',
+    port_ranges: first.ports.join(','),
+    protocol: 'tcp',
+  })
 }
 
 // ---- 单机监控策略弹窗 ----
 
 function openMonitor(h) {
   monitorHost.value = h
+  policyTargets.value = []
+  applyToAll.value = false
   Object.assign(form, emptyPolicyForm(), {
     name: `监控 ${h.hostname || h.ip}`,
     // 主机入口天然是「按 MAC 匹配」，把 MAC 直接填进匹配规则，
@@ -330,23 +360,46 @@ function closeMonitor() {
 
 async function addPolicy() {
   if (!monitorHost.value) return
+  const targets =
+    applyToAll.value && policyTargets.value.length > 1
+      ? policyTargets.value
+      : [{ host: monitorHost.value, ports: [] }]
   saving.value = true
+  actionBusy.policy = true
   try {
-    await api.createHostPolicy(monitorHost.value.id, {
-      ...form,
-      priority: Number(form.priority) || 0,
-      min_port: Number(form.min_port) || 0,
-      max_port: Number(form.max_port) || 0,
-      auto_add: form.auto_action === 'add' || form.auto_add,
-    })
-    toastOk('已添加监控策略')
+    for (const t of targets) {
+      // 每台主机沿用同一份字段值，只把"端口范围"换成该主机被选中的端口，
+      // 避免把 A 主机的端口写进 B 主机的策略。
+      const portRanges = t.ports.length ? t.ports.join(',') : form.port_ranges
+      const payload = {
+        ...form,
+        port_ranges: portRanges,
+        mac_patterns: form.mac_patterns || t.host.mac || '',
+        priority: Number(form.priority) || 0,
+        min_port: Number(form.min_port) || 0,
+        max_port: Number(form.max_port) || 0,
+        auto_add: form.auto_action === 'add' || form.auto_add,
+      }
+      if (t.host.mac) {
+        // 有 MAC：按主机绑定（hosts/{id}/policies），设备换 IP 也不会失配。
+        await api.createHostPolicy(t.host.id, payload)
+      } else {
+        // 没有 MAC：退化为按 MAC 前缀匹配的普通策略，由用户在对话框里填前缀。
+        delete payload.match_target_kind
+        await api.createPolicy({ ...payload, match_target_kind: 'mac' })
+      }
+    }
+    toastOk(targets.length > 1 ? `已为 ${targets.length} 台主机生成监控策略` : '已添加监控策略')
+    monitorHost.value = null
+    policyTargets.value = []
     Object.assign(form, emptyPolicyForm())
-    const p = await api.policies()
-    policies.value = p.policies || []
+    portSel.value = new Set()
+    await Promise.all([load(), refreshScanResults()])
   } catch (err) {
     toastErr(err.message, '添加失败')
   } finally {
     saving.value = false
+    actionBusy.policy = false
   }
 }
 
@@ -524,21 +577,15 @@ onBeforeUnmount(clearPoll)
         </div>
 
         <div class="row wrap" style="margin-top: 12px; gap: 10px; align-items: center">
-          <select v-model="policyAction" class="select" style="width: 220px">
-            <option value="watch">生成「仅观察」策略</option>
-            <option value="add">生成「自动添加」策略</option>
-            <option value="ignore">生成「忽略」策略</option>
-            <option value="delete">生成「删除记录」策略</option>
-          </select>
-          <button class="btn" :disabled="actionBusy.policy || !portSel.size || !canWrite()" @click="createPolicies">
-            <span v-if="actionBusy.policy" class="spin">◌</span>生成监控策略（{{ selectedPorts.length }}）
+          <button class="btn" :disabled="actionBusy.policy || !portSel.size || !canWrite()" @click="openPolicyDialog">
+            <span v-if="actionBusy.policy" class="spin">◌</span>生成监控策略…（{{ selectedPorts.length }}）
           </button>
           <button class="btn primary" :disabled="actionBusy.rules || !portSel.size || !canWrite()" @click="addToRules">
             <span v-if="actionBusy.rules" class="spin">◌</span>添加到映射规则（{{ selectedPorts.length }}）
           </button>
         </div>
         <div class="small dim" style="margin-top: 6px">
-          生成监控策略会按 MAC 绑定主机（同一主机的多个端口合并为一条策略），IP 变化后仍有效；
+          生成监控策略会先弹出表单（已预填端口与主机 MAC），可修改全部字段后再保存；
           添加到映射规则会为每个端口立即创建一条映射。
         </div>
       </div>
@@ -560,6 +607,13 @@ onBeforeUnmount(clearPoll)
         按 MAC <span class="mono">{{ monitorHost.mac }}</span> 绑定，当前 IP
         <span class="mono">{{ monitorHost.ip }}</span>。IP 变化后策略会自动跟随，无需重设。
       </div>
+
+      <label v-if="policyTargets.length > 1" class="field row" style="gap: 10px; margin-bottom: 6px">
+        <Switch v-model="applyToAll" />
+        <span class="small dim">
+          应用到所选全部 {{ policyTargets.length }} 台主机（每台主机使用各自被选中的端口）
+        </span>
+      </label>
 
       <div v-if="openPolicies.length" class="card" style="margin-bottom: 14px">
         <div class="card-head">
