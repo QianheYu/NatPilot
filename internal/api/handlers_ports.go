@@ -239,6 +239,7 @@ func (s *Server) handlePortsAdd(w http.ResponseWriter, r *http.Request) {
 	added, failed := 0, 0
 	applied := 0
 	ruleIDs := []int64{}
+	toApply := make([]model.Rule, 0, len(req.IDs))
 	for _, id := range req.IDs {
 		port, err := s.app.Store.GetPort(id)
 		if err != nil || port == nil {
@@ -254,10 +255,13 @@ func (s *Server) handlePortsAdd(w http.ResponseWriter, r *http.Request) {
 		ruleIDs = append(ruleIDs, rule.ID)
 		added++
 		if rule.Enabled {
-			if _, err := s.app.Mapper.ApplyRule(r.Context(), *rule); err == nil {
-				applied++
-			}
+			toApply = append(toApply, *rule)
 		}
+	}
+	// One gateway discovery for the whole batch: doing it per rule made the
+	// request take N × the discovery timeout when no IGD is reachable.
+	if sum, aerr := s.app.Mapper.ApplyRules(r.Context(), toApply); aerr == nil {
+		applied = sum.Created + sum.Renewed + sum.OK
 	}
 	s.audit(r, "port.bulk_add", fmt.Sprintf("%d ports", len(req.IDs)), fmt.Sprintf("added=%d applied=%d", added, applied), failed == 0)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "added": added, "failed": failed, "applied": applied, "rule_ids": ruleIDs})

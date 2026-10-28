@@ -903,6 +903,60 @@ func (m *Mapper) ApplyRule(ctx context.Context, rule model.Rule) (Summary, error
 	return sum, res.err
 }
 
+// ApplyRules applies a batch of rules sharing one gateway discovery attempt.
+//
+// ApplyRule re-runs discovery whenever no provider is cached, which is the common
+// case on a network without a usable IGD. Adding N ports then cost N discovery
+// timeouts (one every ~6s), so the request that created them looked like it hung.
+// Batching the discovery keeps the call bounded no matter how many ports the user
+// selected; the per-rule work itself is unchanged.
+func (m *Mapper) ApplyRules(ctx context.Context, rules []model.Rule) (Summary, error) {
+	total := Summary{}
+	if len(rules) == 0 {
+		return total, nil
+	}
+	m.mu.RLock()
+	hasProvider := len(m.providers) > 0
+	m.mu.RUnlock()
+	if !hasProvider {
+		m.ensureProviders()
+	}
+	var firstErr error
+	for i := range rules {
+		r := rules[i]
+		if !r.Enabled {
+			if err := m.removeRule(ctx, r); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			total.Removed++
+			total.Changed++
+			continue
+		}
+		res := m.ensureRule(ctx, &r)
+		switch {
+		case res.err != nil:
+			total.Failed++
+			if firstErr == nil {
+				firstErr = res.err
+			}
+		case res.created:
+			total.Created++
+		case res.renewed:
+			total.Renewed++
+		default:
+			total.OK++
+		}
+		total.Changed++
+	}
+	if err := m.store.ReconcilePortStatuses(); err != nil {
+		logging.Debug("mapper", "port status reconcile failed", "error", err.Error())
+	}
+	if m.ev != nil {
+		m.ev.Changed()
+	}
+	return total, firstErr
+}
+
 // ExternalIP asks the preferred gateway (or the first that answers) for the WAN
 // address.
 func (m *Mapper) ExternalIP(ctx context.Context) (string, error) {

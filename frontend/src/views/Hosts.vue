@@ -70,6 +70,9 @@ const scanRun = ref(null)
 const scanPorts = ref([])
 const portSel = ref(new Set())
 const actionBusy = reactive({ rules: false, policy: false })
+// 正在提交「添加到映射规则」的端口：期间显示「添加中…」，等接口确认后再改状态，
+// 不做乐观更新（用户明确要求以服务端确认为准）。
+const pendingPorts = ref(new Set())
 // 生成策略对话框：扫描结果可能跨多台主机，先弹窗让用户确认/修改字段。
 const policyTargets = ref([]) // [{ host, ports: number[] }]
 const applyToAll = ref(false)
@@ -271,23 +274,20 @@ async function addToRules() {
     return
   }
   actionBusy.rules = true
-  // 乐观更新：下发映射要等网关，接口可能要好几秒；先把勾选行标成「已添加」，
-  // 失败再回滚。否则用户会以为点了没反应。
   const ids = ports.map((p) => p.id)
-  const snapshot = scanPorts.value
-  const touched = new Set(ids)
-  scanPorts.value = scanPorts.value.map((p) =>
-    touched.has(p.id) ? { ...p, added: true, status: 'added' } : p,
-  )
+  // 请求在飞：只标记「添加中」，不改状态。状态一律以接口返回后的服务端数据为准。
+  pendingPorts.value = new Set(ids)
   try {
     const res = await api.addPorts({ ids })
     toastOk(`已添加 ${res.added} 条映射规则${res.failed ? `，${res.failed} 条失败` : ''}`)
     portSel.value = new Set()
+    // 成功后才刷新：此时服务端已把端口状态写成 added。
     await Promise.all([load(), refreshScanResults()])
   } catch (err) {
-    scanPorts.value = snapshot // 失败回滚
+    // 失败不改状态：这些端口仍处于原来的「未添加」。
     toastErr(err.message, '添加映射规则失败')
   } finally {
+    pendingPorts.value = new Set()
     actionBusy.rules = false
   }
 }
@@ -568,7 +568,10 @@ onBeforeUnmount(clearPoll)
                 </td>
                 <td class="small">{{ p.service || '—' }}</td>
                 <td>
-                  <Badge :kind="portStatusInfo(p.status).kind">{{ portStatusInfo(p.status).label }}</Badge>
+                  <span v-if="pendingPorts.has(p.id)" class="badge accent">
+                    <span class="spin">◌</span> 添加中…
+                  </span>
+                  <Badge v-else :kind="portStatusInfo(p.status).kind">{{ portStatusInfo(p.status).label }}</Badge>
                 </td>
                 <td class="small mute">{{ truncate(p.banner, 40) || '—' }}</td>
               </tr>
@@ -581,7 +584,8 @@ onBeforeUnmount(clearPoll)
             <span v-if="actionBusy.policy" class="spin">◌</span>生成监控策略…（{{ selectedPorts.length }}）
           </button>
           <button class="btn primary" :disabled="actionBusy.rules || !portSel.size || !canWrite()" @click="addToRules">
-            <span v-if="actionBusy.rules" class="spin">◌</span>添加到映射规则（{{ selectedPorts.length }}）
+            <span v-if="actionBusy.rules" class="spin">◌</span>
+            {{ actionBusy.rules ? '正在添加…' : `添加到映射规则（${selectedPorts.length}）` }}
           </button>
         </div>
         <div class="small dim" style="margin-top: 6px">
