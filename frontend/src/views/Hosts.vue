@@ -4,6 +4,7 @@ import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
+import PolicyFields from '../components/PolicyFields.vue'
 import { toastOk, toastErr, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
 
@@ -19,14 +20,27 @@ const policies = ref([])
 
 const monitorHost = ref(null)
 const saving = ref(false)
-const form = reactive({
-  name: '',
-  port_ranges: '',
-  protocol: 'any',
-  auto_action: 'watch',
-  priority: 0,
-  note: '',
-})
+// 与 PolicyFields 组件一一对应：主机入口和策略页共享同一份字段定义。
+function emptyPolicyForm() {
+  return {
+    name: '',
+    description: '',
+    match_target_kind: 'mac',
+    mac_patterns: '',
+    port_ranges: '',
+    exclude_ranges: '',
+    protocol: 'any',
+    auto_action: 'watch',
+    auto_add: false,
+    min_port: 0,
+    max_port: 0,
+    require_name: '',
+    priority: 0,
+    tags: [],
+    note: '',
+  }
+}
+const form = reactive(emptyPolicyForm())
 
 // ---- 选择的「主机」与「扫描结果端口」----
 const selected = ref(new Set())
@@ -274,8 +288,11 @@ async function createPolicies() {
         continue
       }
       const ranges = [...new Set(portList)].sort((a, b) => a - b).join(',')
+      // 与单机弹窗/策略页保持同一份字段语义：mac 匹配 + 自动填入主机 MAC。
       await api.createHostPolicy(host.id, {
         name: `监控 ${host.hostname || host.ip}`,
+        match_target_kind: 'mac',
+        mac_patterns: host.mac,
         port_ranges: ranges,
         protocol: 'tcp',
         auto_action: policyAction.value,
@@ -298,7 +315,13 @@ async function createPolicies() {
 
 function openMonitor(h) {
   monitorHost.value = h
-  Object.assign(form, { name: '', port_ranges: '', protocol: 'any', auto_action: 'watch', priority: 0, note: '' })
+  Object.assign(form, emptyPolicyForm(), {
+    name: `监控 ${h.hostname || h.ip}`,
+    // 主机入口天然是「按 MAC 匹配」，把 MAC 直接填进匹配规则，
+    // 这样在策略页编辑时匹配范围不是空的。
+    match_target_kind: 'mac',
+    mac_patterns: h.mac || '',
+  })
 }
 
 function closeMonitor() {
@@ -310,16 +333,14 @@ async function addPolicy() {
   saving.value = true
   try {
     await api.createHostPolicy(monitorHost.value.id, {
-      name: form.name,
-      port_ranges: form.port_ranges,
-      protocol: form.protocol,
-      auto_action: form.auto_action,
-      auto_add: form.auto_action === 'add',
+      ...form,
       priority: Number(form.priority) || 0,
-      note: form.note,
+      min_port: Number(form.min_port) || 0,
+      max_port: Number(form.max_port) || 0,
+      auto_add: form.auto_action === 'add' || form.auto_add,
     })
     toastOk('已添加监控策略')
-    Object.assign(form, { name: '', port_ranges: '', protocol: 'any', auto_action: 'watch', priority: 0, note: '' })
+    Object.assign(form, emptyPolicyForm())
     const p = await api.policies()
     policies.value = p.policies || []
   } catch (err) {
@@ -504,8 +525,10 @@ onBeforeUnmount(clearPoll)
 
         <div class="row wrap" style="margin-top: 12px; gap: 10px; align-items: center">
           <select v-model="policyAction" class="select" style="width: 220px">
-            <option value="watch">生成「仅监控」策略</option>
-            <option value="add">生成「自动添加映射」策略</option>
+            <option value="watch">生成「仅观察」策略</option>
+            <option value="add">生成「自动添加」策略</option>
+            <option value="ignore">生成「忽略」策略</option>
+            <option value="delete">生成「删除记录」策略</option>
           </select>
           <button class="btn" :disabled="actionBusy.policy || !portSel.size || !canWrite()" @click="createPolicies">
             <span v-if="actionBusy.policy" class="spin">◌</span>生成监控策略（{{ selectedPorts.length }}）
@@ -572,40 +595,7 @@ onBeforeUnmount(clearPoll)
         </div>
       </div>
 
-      <div class="grid cols-2">
-        <label class="field">
-          <span>策略名称</span>
-          <input v-model="form.name" class="input" :placeholder="`监控 ${monitorHost.hostname || monitorHost.ip}`" />
-        </label>
-        <label class="field">
-          <span>端口范围</span>
-          <input v-model="form.port_ranges" class="input" placeholder="如 22,80,443,8000-8100；留空表示全部端口" />
-        </label>
-        <label class="field">
-          <span>协议</span>
-          <select v-model="form.protocol" class="select">
-            <option value="any">any</option>
-            <option value="tcp">tcp</option>
-            <option value="udp">udp</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>动作</span>
-          <select v-model="form.auto_action" class="select">
-            <option value="watch">仅监控（不自动建映射）</option>
-            <option value="add">发现端口即自动添加映射</option>
-            <option value="ignore">忽略这些端口</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>优先级</span>
-          <input v-model="form.priority" class="input" type="number" min="0" />
-        </label>
-        <label class="field">
-          <span>备注</span>
-          <input v-model="form.note" class="input" placeholder="可选" />
-        </label>
-      </div>
+      <PolicyFields :form="form" host-bound />
 
       <template #footer>
         <button class="btn ghost" @click="closeMonitor">关闭</button>

@@ -272,14 +272,23 @@ func (s *Server) handleListHostPolicies(w http.ResponseWriter, r *http.Request) 
 // hostPolicyRequest is the body of POST /api/hosts/{id}/policies. Everything is
 // optional except that the resulting rule set has to mean something, so sane
 // defaults fill the gaps (watch every TCP port unless told otherwise).
+// hostPolicyRequest carries the whole policy payload, not a reduced subset:
+// the host entry must be able to express everything the 策略与监控 editor can,
+// otherwise the same policy means different things depending on where it was
+// created. Only the host binding itself (MAC) is implied by the URL.
 type hostPolicyRequest struct {
 	Name          string   `json:"name"`
 	Description   string   `json:"description"`
+	MatchTarget   string   `json:"match_target_kind"`
+	MACPatterns   string   `json:"mac_patterns"`
 	PortRanges    string   `json:"port_ranges"`
 	ExcludeRanges string   `json:"exclude_ranges"`
 	Protocol      string   `json:"protocol"`
 	AutoAction    string   `json:"auto_action"`
 	AutoAdd       bool     `json:"auto_add"`
+	MinPort       int      `json:"min_port"`
+	MaxPort       int      `json:"max_port"`
+	RequireName   string   `json:"require_name"`
 	Tags          []string `json:"tags"`
 	Note          string   `json:"note"`
 	Priority      int      `json:"priority"`
@@ -332,18 +341,32 @@ func (s *Server) handleCreateHostPolicy(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// 匹配范围：主机策略默认就是"按这台主机的 MAC 匹配"。既写 MAC（单机绑定，
+	// 匹配时优先使用），也把同一个 MAC 写进 MACPatterns（"MAC 范围"字段），
+	// 这样在策略页编辑时匹配规则不是空的、与手工创建的 mac 类型策略一致。
+	matchKind := strings.TrimSpace(req.MatchTarget)
+	if matchKind == "" {
+		matchKind = model.ScanTargetMAC
+	}
+	macPatterns := strings.TrimSpace(req.MACPatterns)
+	if macPatterns == "" && matchKind == model.ScanTargetMAC {
+		macPatterns = host.MAC
+	}
+
 	p := &model.Policy{
-		Name:        name,
-		Description: req.Description,
-		Enabled:     true,
-		// "mac" 是合法的匹配类型：主机策略本身按 MAC 绑定，把它写成 "host" 会让
-		// 列表显示一个不存在的类型、编辑弹窗的下拉也选不中(显示空白)。
-		MatchTarget:   model.ScanTargetMAC,
+		Name:          name,
+		Description:   req.Description,
+		Enabled:       true,
+		MatchTarget:   matchKind,
+		MACPatterns:   macPatterns,
 		PortRanges:    strings.TrimSpace(req.PortRanges),
 		ExcludeRanges: req.ExcludeRanges,
 		Protocol:      orDefault(strings.TrimSpace(req.Protocol), "any"),
 		AutoAction:    action,
 		AutoAdd:       action == model.ActionAdd || req.AutoAdd,
+		MinPort:       req.MinPort,
+		MaxPort:       req.MaxPort,
+		RequireName:   req.RequireName,
 		Tags:          model.StringList(req.Tags),
 		Note:          req.Note,
 		Priority:      req.Priority,
@@ -351,6 +374,10 @@ func (s *Server) handleCreateHostPolicy(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Enabled != nil {
 		p.Enabled = *req.Enabled
+	}
+	if err := validatePolicy(p); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	newID, err := s.app.Store.CreatePolicy(p)

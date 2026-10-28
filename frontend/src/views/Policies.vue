@@ -5,7 +5,7 @@ import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
 import Switch from '../components/Switch.vue'
-import TagInput from '../components/TagInput.vue'
+import PolicyFields from '../components/PolicyFields.vue'
 import { toastOk, toastErr, canWrite } from '../store'
 import { specPortCount } from '../utils/format'
 
@@ -22,6 +22,7 @@ const form = reactive({
   enabled: true,
   match_target_kind: 'any',
   mac_patterns: '',
+  require_name: '',
   port_ranges: '',
   exclude_ranges: '',
   protocol: 'any',
@@ -71,7 +72,13 @@ function openCreate() {
 
 function openEdit(p) {
   editing.value = p
-  Object.assign(form, { ...p, tags: [...(p.tags || [])] })
+  Object.assign(form, {
+    ...p,
+    tags: [...(p.tags || [])],
+    // 主机入口创建的策略把设备放在 mac 上，MAC 范围字段可能是空的；
+    // 编辑时用 mac 兜底，保证「匹配范围 = MAC」时输入框里看得到规则。
+    mac_patterns: p.mac_patterns || p.mac || '',
+  })
   showEditor.value = true
 }
 
@@ -242,85 +249,7 @@ onMounted(load)
     </div>
 
     <Modal v-if="showEditor" :title="editing ? `编辑策略 #${editing.id}` : '新增策略'" wide @close="showEditor = false">
-      <div class="grid cols-2">
-        <label class="field">
-          <span>名称 *</span>
-          <input v-model="form.name" class="input" placeholder="如 家庭服务白名单" />
-        </label>
-        <label class="field">
-          <span>优先级（越大越先匹配）</span>
-          <input v-model.number="form.priority" class="input" type="number" />
-        </label>
-      </div>
-      <label class="field">
-        <span>说明</span>
-        <input v-model="form.description" class="input" />
-      </label>
-      <div class="grid cols-2">
-        <label class="field">
-          <span>匹配范围</span>
-          <select v-model="form.match_target_kind" class="select">
-            <option value="any">任意</option>
-            <option value="local">本机</option>
-            <option value="cidr">网段 / 局域网</option>
-            <option value="mac">MAC 地址 / 前缀</option>
-            <!-- 历史或未知类型：显示原值而不是让下拉变成空白 -->
-            <option v-if="!['any', 'local', 'cidr', 'remote', 'mac'].includes(form.match_target_kind)" :value="form.match_target_kind">
-              {{ form.match_target_kind || '（未设置）' }}
-            </option>
-          </select>
-        </label>
-        <label v-if="form.match_target_kind === 'mac'" class="field">
-          <span>MAC 地址 / 前缀</span>
-          <input v-model="form.mac_patterns" class="input" placeholder="aa:bb:cc:dd:ee:ff, aa:bb:cc:* （逗号分隔，可用 OUI 前缀）" />
-          <div class="hint">按主机 MAC 匹配，IP 随 DHCP 变化时依然命中；前缀至少 3 字节。</div>
-        </label>
-        <label class="field">
-          <span>协议</span>
-          <select v-model="form.protocol" class="select">
-            <option value="any">任意</option>
-            <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
-          </select>
-        </label>
-      </div>
-      <div class="grid cols-2">
-        <label class="field">
-          <span>端口范围</span>
-          <input v-model="form.port_ranges" class="input" placeholder="3000-3010,8080,9000" />
-        </label>
-        <label class="field">
-          <span>排除端口</span>
-          <input v-model="form.exclude_ranges" class="input" placeholder="22,3389" />
-        </label>
-      </div>
-      <div class="grid cols-3">
-        <label class="field">
-          <span>最小端口</span>
-          <input v-model.number="form.min_port" class="input" type="number" />
-        </label>
-        <label class="field">
-          <span>最大端口</span>
-          <input v-model.number="form.max_port" class="input" type="number" />
-        </label>
-        <label class="field">
-          <span>自动动作</span>
-          <select v-model="form.auto_action" class="select">
-            <option value="watch">仅观察</option>
-            <option value="add">自动添加</option>
-            <option value="ignore">忽略</option>
-            <option value="delete">删除记录</option>
-          </select>
-        </label>
-      </div>
-      <label class="field row" style="gap: 10px">
-        <Switch v-model="form.auto_add" />
-        <span class="small dim">命中时自动加入映射列表（等同于“自动添加”）</span>
-      </label>
-      <label class="field">
-        <span>命中后附加标签</span>
-        <TagInput v-model="form.tags" />
-      </label>
+      <PolicyFields :form="form" />
       <template #footer>
         <button class="btn" @click="showEditor = false">取消</button>
         <button class="btn primary" :disabled="busy.save" @click="save">保存</button>

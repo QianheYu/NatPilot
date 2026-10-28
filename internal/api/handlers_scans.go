@@ -353,8 +353,10 @@ func validatePolicy(p *model.Policy) error {
 				return fmt.Errorf("invalid MAC pattern %q: 需要完整地址 (aa:bb:cc:dd:ee:ff) 或至少 3 字节前缀", pat)
 			}
 		}
-	} else if p.MatchTarget == model.ScanTargetMAC {
-		return fmt.Errorf("match_target_kind=mac 需要填写 mac_patterns")
+	} else if p.MatchTarget == model.ScanTargetMAC && strings.TrimSpace(p.MAC) == "" {
+		// A host-bound policy carries the device in MAC and may leave the pattern
+		// list empty; only a mac-kind policy with neither is unmatchable.
+		return fmt.Errorf("match_target_kind=mac 需要填写 mac_patterns 或绑定主机 MAC")
 	}
 	return nil
 }
@@ -378,6 +380,14 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	p.ID = id
 	if strings.TrimSpace(p.Name) == "" {
 		p.Name = existing.Name
+	}
+	// 策略页的表单没有"绑定主机 MAC"这一项（那是主机入口隐含的），所以编辑
+	// 主机绑定的策略时 mac 会被解成空值，等于悄悄解绑。只要这次编辑仍然按
+	// MAC 匹配，就沿用原来的绑定；改成其它匹配范围时才真正解绑。
+	if strings.TrimSpace(p.MAC) == "" &&
+		strings.TrimSpace(existing.MAC) != "" &&
+		strings.EqualFold(strings.TrimSpace(p.MatchTarget), model.ScanTargetMAC) {
+		p.MAC = existing.MAC
 	}
 	if err := validatePolicy(&p); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
