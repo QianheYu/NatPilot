@@ -46,8 +46,85 @@ type Mapper struct {
 	lastError    string
 	discovering  bool
 
+	// Negative cache for gateway discovery. When a probe finds nothing and the
+	// network fingerprint is unchanged, retrying it within discoveryNegativeTTL
+	// only costs the caller another timeout without any chance of a new answer.
+	lastProbeAt    time.Time
+	lastProbeEmpty bool
+	lastProbeFP    string
+
 	stop chan struct{}
 	wg   sync.WaitGroup
+}
+
+// discoveryNegativeTTL is how long an unsuccessful discovery is reused while
+// the network looks unchanged. Short enough that plugging in a router is
+// noticed, long enough that adding a batch of ports pays the timeout once.
+const discoveryNegativeTTL = 30 * time.Second
+
+// networkFingerprint summarises the local network facts that decide whether a
+// gateway could be found: the default route, the primary address and the set of
+// local addresses. Any change (new router, VPN up/down, DHCP lease) produces a
+// different fingerprint and invalidates the negative cache.
+// fingerprintTTL caches the fingerprint: computing it walks the interface list
+// and the default route, which on Windows spawns a system utility (~1.5s). The
+// value only needs to be fresh enough to notice a network change, and the
+// negative cache it protects already tolerates discoveryNegativeTTL of staleness.
+const fingerprintTTL = 10 * time.Second
+
+var fingerprintCache struct {
+	mu  sync.Mutex
+	at  time.Time
+	val string
+}
+
+func networkFingerprint() string {
+	fingerprintCache.mu.Lock()
+	defer fingerprintCache.mu.Unlock()
+	if !fingerprintCache.at.IsZero() && time.Since(fingerprintCache.at) < fingerprintTTL {
+		return fingerprintCache.val
+	}
+	fingerprintCache.val = computeFingerprint()
+	fingerprintCache.at = time.Now()
+	return fingerprintCache.val
+}
+
+// computeFingerprint does the actual (comparatively expensive) probe.
+func computeFingerprint() string {
+	gw, _ := netutil.DefaultGateway()
+	if gw == "" {
+		gw = netutil.RouteGateway()
+	}
+	primary, _ := netutil.PrimaryIPv4()
+	addrs := []string{}
+	if list, err := netutil.LocalAddresses(); err == nil {
+		for a, ok := range list {
+			if ok {
+				addrs = append(addrs, a)
+			}
+		}
+	}
+	sort.Strings(addrs)
+	return gw + "|" + primary + "|" + strings.Join(addrs, ",")
+}
+
+// shouldSkipDiscovery reports whether a recent unsuccessful probe can be reused.
+func (m *Mapper) shouldSkipDiscovery(fp string, now time.Time) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if !m.lastProbeEmpty || m.lastProbeFP != fp || m.lastProbeAt.IsZero() {
+		return false
+	}
+	return now.Sub(m.lastProbeAt) < discoveryNegativeTTL
+}
+
+// recordProbe stores the outcome of one discovery attempt for the negative cache.
+func (m *Mapper) recordProbe(empty bool) {
+	m.mu.Lock()
+	m.lastProbeAt = time.Now()
+	m.lastProbeEmpty = empty
+	m.lastProbeFP = networkFingerprint()
+	m.mu.Unlock()
 }
 
 // New creates a mapper.
@@ -140,6 +217,9 @@ func (m *Mapper) Discover(ctx context.Context) ([]model.Gateway, error) {
 		m.setLastError(err.Error())
 		return nil, err
 	}
+	// Feed the negative cache so the next rule/port operation does not immediately
+	// repeat the same (possibly slow) probe.
+	m.recordProbe(len(discovered) == 0)
 	logging.Info("mapper", "gateway discovery complete", "count", len(discovered))
 
 	persisted := []model.Gateway{}
@@ -236,6 +316,11 @@ func (m *Mapper) ensureProviders() {
 	if n > 0 {
 		return
 	}
+	fp := networkFingerprint()
+	if m.shouldSkipDiscovery(fp, time.Now()) {
+		logging.Debug("mapper", "gateway discovery skipped (recent attempt found nothing, network unchanged)")
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	opts := proto.DiscoverOptions{
@@ -247,7 +332,13 @@ func (m *Mapper) ensureProviders() {
 		opts.LocalIP = ip
 	}
 	found, err := proto.Discover(ctx, opts)
-	if err != nil || len(found) == 0 {
+	if err != nil {
+		// An error is not "no gateway exists", so it is not cached: the next call
+		// may well succeed.
+		return
+	}
+	m.recordProbe(len(found) == 0)
+	if len(found) == 0 {
 		return
 	}
 	m.mu.Lock()
