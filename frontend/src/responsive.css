@@ -945,3 +945,57 @@ table.data .cell-actions .btn.ghost.danger {
 .gt-tree::-webkit-scrollbar {
   height: 8px;
 }
+
+/* ---- 所有表格：单元格单行, 过长省略号 ----
+   内容一律不换行（避免不同窗口宽度下折行长短不一、行高参差），
+   超出的部分截断并用省略号表示；完整内容点行在详情弹窗里查看。 */
+.table-wrap table.data th,
+.table-wrap table.data td {
+  white-space: nowrap;
+}
+
+.table-wrap table.data td {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 行可点击（查看详情）的视觉提示 */
+.table-wrap table.data tbody tr.data-row,
+.table-wrap table.data tbody tr:not(.group-row):not(.detail-row) {
+  cursor: pointer;
+}
+
+.table-wrap table.data tbody tr.data-row:hover > td,
+.table-wrap table.data tbody tr:not(.group-row):not(.detail-row):hover > td {
+  background: color-mix(in srgb, var(--accent-soft) 45%, transparent);
+}
+
+/* 操作列的按钮需要完整显示, 不参与截断 */
+.table-wrap table.data td.right,
+.table-wrap table.data td.actions,
+.table-wrap table.data td.cell-exp {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* ---- 单元格内的次要块元素改为行内 ----
+   许多单元格是 "主值 + <div>次要信息</div>" 的结构，div 是块级元素必然会另起一行。
+   这里把它们改成行内并用 · 分隔, 保证整行内容只占一行、超出由省略号处理;
+   进度条(.progress)与按钮组(.cell-actions)保持原样。 */
+.table-wrap table.data td > div:not(.progress):not(.cell-actions) {
+  display: inline;
+  font-size: inherit;
+  color: var(--text-mute);
+}
+
+.table-wrap table.data td > div:not(.progress):not(.cell-actions)::before {
+  content: ' · ';
+  color: var(--text-mute);
+}
+
+/* 徽标/开关本身是行内块, 不需要分隔符 */
+.table-wrap table.data td > div:not(.progress):not(.cell-actions):empty {
+  display: none;
+}

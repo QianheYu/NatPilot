@@ -11,6 +11,8 @@ import AppTopbar from './layout/AppTopbar.vue'
 import CommandPalette from './layout/CommandPalette.vue'
 import Modal from './components/Modal.vue'
 import ChangePassword from './components/ChangePassword.vue'
+import RowDetailModal from './components/RowDetailModal.vue'
+import { installRowDetail } from './composables/useRowDetail'
 
 const route = useRoute()
 const router = useRouter()
@@ -181,7 +183,11 @@ watch(
   { immediate: true },
 )
 
+let disposeRowDetail = null
+
 onMounted(async () => {
+  disposeRowDetail = installRowDetail(document.body)
+
   window.addEventListener('keydown', onKey)
   window.addEventListener('resize', onResize)
   await boot()
@@ -190,6 +196,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (disposeRowDetail) disposeRowDetail()
+
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', onResize)
   document.body.classList.remove('drawer-open')
@@ -266,4 +274,5 @@ defineExpose({ refreshBadges })
       <div>{{ t.message }}</div>
     </div>
   </div>
+  <RowDetailModal />
 </template>
