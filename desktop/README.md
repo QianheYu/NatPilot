@@ -152,3 +152,27 @@ macOS 的 `NSStatusItem` 需要 Objective-C 运行时，Linux 的系统托盘需
 Electron 自带这三种平台的托盘实现，因此桌面版统一走 Electron。
 Go 侧不再发布单独的启动器：需要窗口与托盘就用 Electron 版，服务器环境直接
 `natpilot serve` + 浏览器。
+## 启动器设置（launcher.json）
+
+桌面壳自身的配置与 Web 控制台的 `系统设置` **分开**，存放在
+`<userData>/launcher.json`（Windows 为 `%APPDATA%\natpilot-desktop\launcher.json`）。
+即使服务无法启动（路径写错、端口被占用），也可以从托盘打开
+「启动器设置…」修正。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `autoStartService` | `true` | 启动器启动时是否自动拉起 Go 服务；`false` 时只显示启动面板 |
+| `serverBinary` | `""` | 服务可执行文件路径，空=自动探测 |
+| `dataDir` | `""` | 数据目录，空=`<userData>/natpilot` |
+| `host` | `"127.0.0.1"` | 服务监听地址（默认只绑回环） |
+| `port` | `0` | 固定端口；`0`=系统分配（失败自动换端口重试） |
+| `extraArgs` | `[]` | 追加给 `serve` 的参数，逐项一个 token |
+| `closeToTray` | `true` | 关闭窗口时驻留托盘；`false` 则关闭即退出 |
+| `startHiddenOnAutostart` | `true` | 开机自启时只驻留托盘 |
+| `checkUpdatesOnStart` | `true` | 启动后静默检查一次更新 |
+
+最终命令行形如：
+
+```
+natpilot.exe --host <host> --port <port> --mode desktop --data-dir <dir> <extraArgs...> serve
+```

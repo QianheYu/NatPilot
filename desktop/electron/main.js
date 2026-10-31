@@ -17,7 +17,7 @@
 // Run:  npm install && npm start      (development)
 //       npm run dist                  (package with electron-builder)
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const http = require('node:http')
 const https = require('node:https')
@@ -25,6 +25,7 @@ const net = require('node:net')
 const path = require('node:path')
 const fs = require('node:fs')
 const autostart = require('./autostart')
+const launcherConfig = require('./launcher-config')
 const { isNewer } = require('./version')
 
 let serverProcess = null
@@ -91,6 +92,17 @@ function saveWindowState() {
 // failed start can say exactly where the server was expected.
 function serverBinary() {
   const name = process.platform === 'win32' ? 'natpilot.exe' : 'natpilot'
+  // 用户显式指定的路径优先：它一定是"用户想启动的那个程序"，不再猜。
+  const configured = launcherConfig.loadConfig().serverBinary
+  if (configured) {
+    try {
+      if (fs.existsSync(configured) && fs.statSync(configured).isFile()) {
+        return { path: path.resolve(configured), probed: [configured] }
+      }
+    } catch {
+      /* 配置里的路径不可用：回退到自动探测 */
+    }
+  }
   const resources = process.resourcesPath || ''
   const exeDir = path.dirname(process.execPath)
   let appPath = ''
@@ -191,7 +203,13 @@ const SERVER_READY_TIMEOUT_MS = 20000
 const SERVER_STOP_GRACE_MS = 3000
 
 function serverArgs(port, dataDir) {
-  return ['--host', '127.0.0.1', '--port', String(port), '--mode', 'desktop', '--data-dir', dataDir, 'serve']
+  const cfg = launcherConfig.loadConfig()
+  const host = cfg.host || '127.0.0.1'
+  const args = ['--host', host, '--port', String(port), '--mode', 'desktop', '--data-dir', dataDir]
+  // 额外参数放在 serve 之前，避免被当成子命令参数位置错误。
+  if (Array.isArray(cfg.extraArgs) && cfg.extraArgs.length) args.push(...cfg.extraArgs)
+  args.push('serve')
+  return args
 }
 
 function spawnServer(binPath, port, dataDir) {
@@ -295,6 +313,8 @@ function launchAndWait(binPath, port, dataDir, url, readyTimeoutMs) {
 // dataDirPath is the directory the Go server keeps its database in. The desktop
 // shell owns it so the tray can reveal it and so every start uses the same path.
 function dataDirPath() {
+  const configured = launcherConfig.loadConfig().dataDir
+  if (configured) return configured
   return path.join(app.getPath('userData'), 'natpilot')
 }
 
@@ -309,7 +329,10 @@ async function startServer() {
     if (remaining <= 1000) break
     let port
     try {
-      port = await freePort()
+      // 配置了固定端口就先试它；失败后仍会退回系统分配的端口，
+      // 因此"端口被占用"不会让启动器彻底起不来。
+      const preferred = launcherConfig.loadConfig().port
+      port = preferred > 0 && attempt === 1 ? preferred : await freePort()
     } catch (err) {
       throw new Error(`无法分配本地端口: ${err.message}`)
     }
@@ -445,7 +468,21 @@ function stopServer() {
 // one (the tray owns the process, so it could no longer be stopped).
 let serverStartPromise = null
 
+// launcherWantService 表示"这次会话是否应该拉起服务"：用户在启动器设置里
+// 关闭了自动启动时，只有手动点"启动服务"才会真正启动。
+let serviceRequested = false
+
+function autoStartServiceEnabled() {
+  return launcherConfig.loadConfig().autoStartService
+}
+
 function ensureServer() {
+  // 启动器设置里关掉了"自动运行服务"：此时只有用户点「启动服务」才允许起进程，
+  // 否则显示设置窗口，避免"明明关了自动启动却又被偷偷拉起来"。
+  if (!autoStartServiceEnabled() && !serviceRequested && !quitting) {
+    openLauncherWindow()
+    return Promise.reject(new Error('服务尚未启动：请在启动器设置窗口点击「启动服务」'))
+  }
   if (serverStartPromise) return serverStartPromise
   serverStartPromise = startServer().finally(() => {
     serverStartPromise = null
@@ -676,6 +713,12 @@ async function createWindow() {
   mainWindow.on('close', (event) => {
     saveWindowState()
     if (quitting) return
+    // 用户可以在启动器设置里关掉"驻留托盘"：那就关闭即退出。
+    if (!launcherConfig.loadConfig().closeToTray) {
+      quitting = true
+      app.quit()
+      return
+    }
     event.preventDefault()
     mainWindow.hide()
     if (process.platform === 'darwin' && app.dock) app.dock.hide()
@@ -767,6 +810,143 @@ function openDataDir() {
   })
 }
 
+// ------------------------------------------------ launcher settings window
+//
+// 启动器自身的设置与 Web 控制台的"系统设置"分开：即使服务起不来（路径写错、
+// 端口被占），用户也要能打开这个窗口把服务重新启动起来。
+let launcherWindow = null
+
+function launcherState() {
+  const { path: binPath } = serverBinary()
+  return {
+    config: launcherConfig.loadConfig(),
+    url: serverURL || '',
+    binaryPath: path.isAbsolute(binPath) ? binPath : '',
+    dataDir: dataDirPath(),
+    version: appVersion(),
+  }
+}
+
+function openLauncherWindow() {
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    launcherWindow.show()
+    launcherWindow.focus()
+    return launcherWindow
+  }
+  launcherWindow = new BrowserWindow({
+    width: 800,
+    height: 860,
+    minWidth: 700,
+    minHeight: 620,
+    title: 'NatPilot 启动器设置',
+    autoHideMenuBar: true,
+    show: false,
+    backgroundColor: '#0f141c',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      preload: path.join(__dirname, 'launcher-preload.js'),
+    },
+  })
+  launcherWindow.loadFile(path.join(__dirname, 'launcher.html'))
+  launcherWindow.once('ready-to-show', () => launcherWindow.show())
+  launcherWindow.on('closed', () => {
+    launcherWindow = null
+  })
+  return launcherWindow
+}
+
+async function startServerFromUI() {
+  serviceRequested = true
+  try {
+    const url = await ensureServer()
+    if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadURL(url)
+    showWindow()
+    return url
+  } finally {
+    updateTray()
+  }
+}
+
+async function stopServerFromUI() {
+  await stopServer()
+  updateTray()
+}
+
+function registerLauncherIPC() {
+  ipcMain.handle('launcher:get-state', () => launcherState())
+  ipcMain.handle('launcher:save', (_evt, cfg) => {
+    try {
+      launcherConfig.saveConfig(cfg || {})
+      updateTray()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) }
+    }
+  })
+  ipcMain.handle('launcher:reset', () => {
+    try {
+      const cfg = launcherConfig.saveConfig(launcherConfig.DEFAULTS)
+      updateTray()
+      return { ok: true, config: cfg, state: launcherState() }
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err), config: launcherConfig.DEFAULTS }
+    }
+  })
+  ipcMain.handle('launcher:pick-binary', async () => {
+    const res = await dialog.showOpenDialog(launcherWindow || undefined, {
+      title: '选择 natpilot 可执行文件',
+      properties: ['openFile'],
+    })
+    return res.canceled ? '' : res.filePaths[0]
+  })
+  ipcMain.handle('launcher:pick-dir', async () => {
+    const res = await dialog.showOpenDialog(launcherWindow || undefined, {
+      title: '选择数据目录',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    return res.canceled ? '' : res.filePaths[0]
+  })
+  ipcMain.handle('launcher:start-service', async () => {
+    try {
+      await startServerFromUI()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) }
+    }
+  })
+  ipcMain.handle('launcher:stop-service', async () => {
+    try {
+      await stopServerFromUI()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) }
+    }
+  })
+  ipcMain.handle('launcher:restart-service', async () => {
+    try {
+      serviceRequested = true
+      await restartService()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) }
+    }
+  })
+  ipcMain.handle('launcher:open-console', () => {
+    if (serverURL) showWindow()
+    return { ok: true }
+  })
+  ipcMain.handle('launcher:open-data-dir', () => {
+    openDataDir()
+    return { ok: true }
+  })
+  ipcMain.handle('launcher:close', () => {
+    if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.close()
+    return { ok: true }
+  })
+}
+
 function createTray() {
   const image = trayImage()
   if (!image) {
@@ -795,7 +975,12 @@ function trayTemplate() {
     },
     { type: 'separator' },
     { label: '打开控制台', click: () => showWindow() },
+    { label: '启动器设置…', click: () => openLauncherWindow() },
     { label: '系统设置…', click: () => openSettings() },
+    {
+      label: running ? '停止服务' : '启动服务',
+      click: () => (running ? stopServerFromUI() : startServerFromUI()),
+    },
     { label: '在浏览器中打开', enabled: running, click: () => serverURL && shell.openExternal(serverURL) },
     { type: 'separator' },
     {
@@ -866,8 +1051,15 @@ if (!gotLock) {
     app.setName('NatPilot')
     // Windows groups taskbar entries and notifications by AppUserModelID.
     if (process.platform === 'win32') app.setAppUserModelId('com.natpilot.desktop')
+    registerLauncherIPC()
     createTray()
-    if (STARTED_HIDDEN) {
+    if (!autoStartServiceEnabled()) {
+      // 用户关掉了自动启动：不建控制台窗口，先让他决定什么时候启动服务。
+      if (!STARTED_HIDDEN) openLauncherWindow()
+      updateTray()
+      return
+    }
+    if (STARTED_HIDDEN && launcherConfig.loadConfig().startHiddenOnAutostart) {
       // Launched by the OS at login: stay in the tray, but boot the server anyway
       // so the console is ready the moment the user opens it.
       try {
@@ -881,7 +1073,9 @@ if (!gotLock) {
     }
     // One silent update check shortly after boot; the tray entry can be used for
     // an on-demand check with visible feedback.
-    const timer = setTimeout(() => checkForUpdates(false), 10000)
+    const timer = launcherConfig.loadConfig().checkUpdatesOnStart
+      ? setTimeout(() => checkForUpdates(false), 10000)
+      : null
     if (timer && typeof timer.unref === 'function') timer.unref()
   })
 

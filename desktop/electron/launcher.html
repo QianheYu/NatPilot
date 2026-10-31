@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>NatPilot 启动器设置</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <style>
+      :root {
+        --bg: #0f141c;
+        --elev: #161d27;
+        --border: #263041;
+        --text: #e6edf7;
+        --dim: #93a1b5;
+        --accent: #4c9aff;
+        --ok: #35c17f;
+        --danger: #e5534b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 18px 20px 20px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      h1 { margin: 0 0 4px; font-size: 15px; }
+      .sub { color: var(--dim); font-size: 12px; margin-bottom: 14px; }
+      .status {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 4px 10px;
+        padding: 10px 12px;
+        margin-bottom: 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--elev);
+      }
+      .status span.k { color: var(--dim); font-size: 12px; }
+      .status span.v { word-break: break-all; font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+      .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+      .dot.on { background: var(--ok); }
+      .dot.off { background: var(--danger); }
+      fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px 12px 4px; margin: 0 0 14px; }
+      legend { color: var(--dim); font-size: 12px; padding: 0 6px; }
+      .row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 10px; }
+      .row > label { color: var(--dim); font-size: 12px; }
+      .row .hint { grid-column: 1 / -1; color: var(--dim); font-size: 11px; margin: -4px 0 0 170px; }
+      input[type="text"], input[type="number"] {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #0c1118;
+        color: var(--text);
+        font-size: 12px;
+        font-family: ui-monospace, Consolas, monospace;
+      }
+      input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); }
+      .inline { display: flex; gap: 8px; align-items: center; }
+      .inline input[type="text"] { flex: 1; }
+      button {
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--elev);
+        color: var(--text);
+        font-size: 12px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      button.primary { background: rgba(76, 154, 255, 0.16); border-color: rgba(76, 154, 255, 0.5); color: var(--accent); }
+      button.danger { color: var(--danger); }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .footer { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+      .footer .spacer { flex: 1; }
+      .toast { margin-top: 10px; font-size: 12px; min-height: 18px; }
+      .toast.ok { color: var(--ok); }
+      .toast.err { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <h1>启动器设置</h1>
+    <div class="sub">这些设置控制 Electron 启动器本身：如何拉起 NatPilot 服务、传什么参数。与 Web 控制台的系统设置互不影响。</div>
+
+    <div class="status">
+      <span class="k">服务状态</span>
+      <span class="v"><span id="stDot" class="dot off"></span><span id="stText">未知</span></span>
+      <span class="k">控制台地址</span>
+      <span class="v" id="stUrl">—</span>
+      <span class="k">可执行文件</span>
+      <span class="v" id="stBin">—</span>
+      <span class="k">数据目录</span>
+      <span class="v" id="stData">—</span>
+      <span class="k">启动器版本</span>
+      <span class="v" id="stVer">—</span>
+    </div>
+
+    <fieldset>
+      <legend>服务启动</legend>
+      <div class="row">
+        <label>启动时自动运行服务</label>
+        <div class="inline">
+          <input type="checkbox" id="autoStartService" />
+          <span style="color: var(--dim); font-size: 12px">关闭后启动器只显示本面板，由你手动启动服务</span>
+        </div>
+      </div>
+      <div class="row">
+        <label>服务可执行文件</label>
+        <div class="inline">
+          <input type="text" id="serverBinary" placeholder="留空 = 自动探测" />
+          <button id="pickBinary">浏览…</button>
+        </div>
+        <div class="hint">留空时按 resources/bin → 安装目录 → 仓库 bin 的顺序自动查找 natpilot。</div>
+      </div>
+      <div class="row">
+        <label>数据目录</label>
+        <div class="inline">
+          <input type="text" id="dataDir" placeholder="留空 = %APPDATA%\\natpilot-desktop\\natpilot" />
+          <button id="pickDir">浏览…</button>
+        </div>
+        <div class="hint">数据库与配置都放在这里；切换后服务会用另一个数据库启动。</div>
+      </div>
+      <div class="row">
+        <label>监听地址</label>
+        <input type="text" id="host" placeholder="127.0.0.1" />
+        <div class="hint">默认只绑定回环地址，控制台不会暴露到局域网。</div>
+      </div>
+      <div class="row">
+        <label>端口</label>
+        <input type="number" id="port" min="0" max="65535" placeholder="0 = 自动选择" />
+        <div class="hint">填固定端口便于书签/防火墙放行；0 表示由系统分配（被占用会自动换端口重试）。</div>
+      </div>
+      <div class="row">
+        <label>额外启动参数</label>
+        <input type="text" id="extraArgs" placeholder="例如：--log-level info --log-format json" />
+        <div class="hint">按空格分隔，追加在 <code>serve</code> 之后。</div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>启动器行为</legend>
+      <div class="row">
+        <label>关闭窗口时驻留托盘</label>
+        <div class="inline">
+          <input type="checkbox" id="closeToTray" />
+          <span style="color: var(--dim); font-size: 12px">关闭后仍可通过托盘再次打开；取消勾选则关闭窗口即退出</span>
+        </div>
+      </div>
+      <div class="row">
+        <label>开机自启时静默启动</label>
+        <div class="inline">
+          <input type="checkbox" id="startHiddenOnAutostart" />
+          <span style="color: var(--dim); font-size: 12px">登录后只在托盘驻留，不弹窗口</span>
+        </div>
+      </div>
+      <div class="row">
+        <label>启动时检查更新</label>
+        <div class="inline">
+          <input type="checkbox" id="checkUpdatesOnStart" />
+          <span style="color: var(--dim); font-size: 12px">启动约 10 秒后静默检查一次</span>
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="footer">
+      <button class="primary" id="save">保存设置</button>
+      <button id="reset">恢复默认</button>
+      <span class="spacer"></span>
+      <button id="startService">启动服务</button>
+      <button id="restartService">重启服务</button>
+      <button id="openConsole">打开控制台</button>
+      <button id="openDataDir">打开数据目录</button>
+      <button id="close">关闭</button>
+    </div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const FIELDS = ['autoStartService', 'serverBinary', 'dataDir', 'host', 'port', 'closeToTray', 'startHiddenOnAutostart', 'checkUpdatesOnStart']
+
+      function toast(text, kind) {
+        const el = $('toast')
+        el.textContent = text
+        el.className = 'toast ' + (kind || '')
+        if (kind === 'ok') setTimeout(() => { if (el.textContent === text) el.textContent = '' }, 2500)
+      }
+
+      function fill(state) {
+        const cfg = state.config || {}
+        for (const f of FIELDS) {
+          const el = $(f)
+          if (el.type === 'checkbox') el.checked = !!cfg[f]
+          else el.value = cfg[f] === 0 && f === 'port' ? '' : (cfg[f] ?? '')
+        }
+        $('extraArgs').value = (cfg.extraArgs || []).join(' ')
+        $('stUrl').textContent = state.url || '未运行'
+        $('stBin').textContent = state.binaryPath || '（未找到）'
+        $('stData').textContent = state.dataDir || '—'
+        $('stVer').textContent = state.version || '—'
+        const running = !!state.url
+        $('stDot').className = 'dot ' + (running ? 'on' : 'off')
+        $('stText').textContent = running ? '运行中' : '已停止'
+        $('startService').disabled = running
+        $('stopService') && ($('stopService').disabled = !running)
+        $('restartService').disabled = !running
+        $('openConsole').disabled = !running
+      }
+
+      async function refresh() {
+        fill(await window.launcher.getState())
+      }
+
+      function collect() {
+        return {
+          autoStartService: $('autoStartService').checked,
+          serverBinary: $('serverBinary').value.trim(),
+          dataDir: $('dataDir').value.trim(),
+          host: $('host').value.trim() || '127.0.0.1',
+          port: Number($('port').value) || 0,
+          extraArgs: $('extraArgs').value.split(/\s+/).filter(Boolean),
+          closeToTray: $('closeToTray').checked,
+          startHiddenOnAutostart: $('startHiddenOnAutostart').checked,
+          checkUpdatesOnStart: $('checkUpdatesOnStart').checked,
+        }
+      }
+
+      $('save').addEventListener('click', async () => {
+        const res = await window.launcher.save(collect())
+        toast(res.ok ? '已保存（服务相关改动需重启服务生效）' : res.error, res.ok ? 'ok' : 'err')
+        await refresh()
+      })
+      $('reset').addEventListener('click', async () => {
+        const res = await window.launcher.resetDefaults()
+        fill({ config: res.config, ...res.state })
+        toast('已恢复默认值，记得点保存', 'ok')
+      })
+      $('pickBinary').addEventListener('click', async () => {
+        const p = await window.launcher.pickBinary()
+        if (p) $('serverBinary').value = p
+      })
+      $('pickDir').addEventListener('click', async () => {
+        const p = await window.launcher.pickDir()
+        if (p) $('dataDir').value = p
+      })
+      $('startService').addEventListener('click', async () => {
+        toast('正在启动服务…')
+        const res = await window.launcher.startService()
+        toast(res.ok ? '服务已启动' : res.error, res.ok ? 'ok' : 'err')
+        await refresh()
+      })
+      $('restartService').addEventListener('click', async () => {
+        toast('正在重启服务…')
+        const res = await window.launcher.restartService()
+        toast(res.ok ? '服务已重启' : res.error, res.ok ? 'ok' : 'err')
+        await refresh()
+      })
+      $('openConsole').addEventListener('click', () => window.launcher.openConsole())
+      $('openDataDir').addEventListener('click', () => window.launcher.openDataDir())
+      $('close').addEventListener('click', () => window.launcher.close())
+
+      refresh()
+    </script>
+  </body>
+</html>
