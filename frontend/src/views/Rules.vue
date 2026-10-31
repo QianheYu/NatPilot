@@ -5,6 +5,7 @@ import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import GroupCheckbox from '../components/GroupCheckbox.vue'
 import Modal from '../components/Modal.vue'
+import Pager from '../components/Pager.vue'
 import TagInput from '../components/TagInput.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
@@ -26,7 +27,7 @@ const rules = ref([])
 const total = ref(0)
 const allTags = ref({})
 const selected = ref(new Set())
-const filters = reactive({ q: '', tags: [], enabled: '', protocol: '', sort: 'id', order: 'desc', limit: 200 })
+const filters = reactive({ q: '', tags: [], enabled: '', protocol: '', sort: 'id', order: 'desc', limit: 50, offset: 0 })
 const showEditor = ref(false)
 const editing = ref(null)
 const busy = reactive({})
@@ -199,6 +200,7 @@ async function load() {
       sort: filters.sort,
       order: filters.order,
       limit: filters.limit,
+    offset: filters.offset,
     })
     rules.value = res.rules || []
     total.value = res.total || 0
@@ -489,6 +491,13 @@ onMounted(() => {
           </tbody>
         </table>
       </div>
+      <Pager
+        :total="total"
+        :limit="filters.limit"
+        :offset="filters.offset"
+        @update:limit="(v) => { filters.limit = v; filters.offset = 0; load() }"
+        @update:offset="(v) => { filters.offset = v; load() }"
+      />
       </div>
     </div>
 

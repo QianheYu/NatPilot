@@ -71,3 +71,23 @@ func atoiDefault(s string, def int) int {
 	}
 	return n
 }
+
+// pageArgs reads the standard limit/offset pagination query parameters and
+// clamps them to a sane range so a hostile value cannot ask for everything.
+func pageArgs(q url.Values) (limit, offset int) {
+	limit = 50
+	if v := strings.TrimSpace(q.Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if v := strings.TrimSpace(q.Get("offset")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	return limit, offset
+}

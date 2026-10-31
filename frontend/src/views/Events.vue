@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
+import Pager from '../components/Pager.vue'
 import { store, toastOk, toastErr, bumpEventsRevision } from '../store'
 import { fmtTime } from '../utils/format'
 import { useLive } from '../composables/useLive'
@@ -14,14 +15,14 @@ const unread = ref(0)
 const liveLog = ref([])
 const tab = ref('events')
 const busy = reactive({})
-const filters = reactive({ level: '', category: '', q: '', limit: 200 })
+const filters = reactive({ level: '', category: '', q: '', limit: 200, offset: 0 })
 
 const categories = ['gateway', 'mapping', 'scan', 'scanner', 'policy', 'auth', 'api', 'scheduler', 'app']
 
 async function loadEvents() {
   loading.value = true
   try {
-    const res = await api.events({ level: filters.level, category: filters.category, q: filters.q, limit: filters.limit })
+    const res = await api.events({ level: filters.level, category: filters.category, q: filters.q, limit: filters.limit, offset: filters.offset })
     events.value = res.events || []
     total.value = res.total || 0
     unread.value = res.unread || 0
@@ -186,6 +187,13 @@ onMounted(loadEvents)
             </tbody>
           </table>
         </div>
+      <Pager
+        :total="total"
+        :limit="filters.limit"
+        :offset="filters.offset"
+        @update:limit="(v) => { filters.limit = v; filters.offset = 0; loadEvents() }"
+        @update:offset="(v) => { filters.offset = v; loadEvents() }"
+      />
       </div>
     </div>
   </div>

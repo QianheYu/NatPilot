@@ -53,6 +53,7 @@ func (s *Server) handleListGateways(w http.ResponseWriter, r *http.Request) {
 	pref := s.app.Mapper.PreferredKey()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"gateways":         gws,
+		"total":            len(gws),
 		"preferred":        pref,
 		"last_discover":    s.app.Mapper.LastDiscover(),
 		"last_error":       s.app.Mapper.LastError(),

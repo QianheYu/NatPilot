@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"github.com/ekko-studio/natpilot/internal/logging"
 	"github.com/ekko-studio/natpilot/internal/model"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,42 @@ func (s *Store) GetUser(id int64) (*model.User, error) {
 }
 
 // ListUsers returns every user.
+// ListUsersPage returns one page of users filtered by q, plus the total count.
+func (s *Store) ListUsersPage(q string, limit, offset int) ([]model.User, int, error) {
+	where := ""
+	args := []any{}
+	if q = strings.TrimSpace(q); q != "" {
+		like := "%" + q + "%"
+		where = " WHERE username LIKE ? OR display_name LIKE ? OR email LIKE ?"
+		args = append(args, like, like, like)
+	}
+	var total int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.Query("SELECT "+userCols+" FROM users"+where+" ORDER BY id ASC LIMIT ? OFFSET ?",
+		append(args, limit, offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []model.User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, *u)
+	}
+	return out, total, rows.Err()
+}
+
 func (s *Store) ListUsers() ([]model.User, error) {
 	rows, err := s.db.Query(`SELECT ` + userCols + ` FROM users ORDER BY id ASC`)
 	if err != nil {
@@ -349,6 +386,7 @@ func joinAnd(parts []string) string {
 func nowMinusDays(days int) string {
 	return time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339Nano)
 }
+
 // PurgeEventsOlderThan deletes audit events older than the given number of days.
 func (s *Store) PurgeEventsOlderThan(days int) (int64, error) {
 	if days <= 0 {

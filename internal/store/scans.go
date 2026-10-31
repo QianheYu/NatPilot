@@ -217,6 +217,51 @@ func (s *Store) GetPolicy(id int64) (*model.Policy, error) {
 }
 
 // ListPolicies returns all policies ordered by priority.
+// ListPoliciesPage returns one page of policies filtered by q, plus the total
+// number of matches so the console can render a pager.
+func (s *Store) ListPoliciesPage(q string, limit, offset int) ([]model.Policy, int, error) {
+	where := ""
+	args := []any{}
+	if q = strings.TrimSpace(q); q != "" {
+		like := "%" + q + "%"
+		where = " WHERE name LIKE ? OR description LIKE ? OR port_ranges LIKE ? OR mac_patterns LIKE ?"
+		args = append(args, like, like, like, like)
+	}
+	var total int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM policies"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.Query("SELECT "+policyCols+" FROM policies"+where+" ORDER BY priority DESC, id ASC LIMIT ? OFFSET ?",
+		append(args, limit, offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []model.Policy{}
+	for rows.Next() {
+		p, err := scanPolicy(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, *p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	rows.Close()
+	// 关联主机信息必须在 rows 关闭之后进行，否则同一连接上再查询会阻塞。
+	for i := range out {
+		s.attachPolicyHost(&out[i])
+	}
+	return out, total, nil
+}
+
 func (s *Store) ListPolicies() ([]model.Policy, error) {
 	rows, err := s.db.Query(`SELECT ` + policyCols + ` FROM policies ORDER BY priority DESC, id ASC`)
 	if err != nil {
@@ -396,6 +441,53 @@ func (s *Store) GetSchedule(id int64) (*model.Schedule, error) {
 }
 
 // ListSchedules returns all schedules.
+// ListSchedulesPage returns one page of schedules filtered by q.
+func (s *Store) ListSchedulesPage(q string, limit, offset int) ([]model.Schedule, int, error) {
+	where := ""
+	args := []any{}
+	if q = strings.TrimSpace(q); q != "" {
+		like := "%" + q + "%"
+		where = " WHERE name LIKE ? OR target_ref LIKE ?"
+		args = append(args, like, like)
+	}
+	var total int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM schedules"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	list, err := s.ListSchedules()
+	if err != nil {
+		return nil, 0, err
+	}
+	// 计划任务数量很少（个位数到几十），筛选与分页在内存里完成即可。
+	filtered := make([]model.Schedule, 0, len(list))
+	needle := strings.ToLower(strings.TrimSpace(q))
+	for _, sc := range list {
+		if needle != "" {
+			name := strings.ToLower(sc.Name)
+			ref := strings.ToLower(sc.TargetRef)
+			if !strings.Contains(name, needle) && !strings.Contains(ref, needle) {
+				continue
+			}
+		}
+		filtered = append(filtered, sc)
+	}
+	total = len(filtered)
+	if offset > len(filtered) {
+		offset = len(filtered)
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[offset:end], total, nil
+}
+
 func (s *Store) ListSchedules() ([]model.Schedule, error) {
 	rows, err := s.db.Query(`SELECT ` + schedCols + ` FROM schedules ORDER BY id ASC`)
 	if err != nil {

@@ -1,14 +1,17 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
+import Pager from '../components/Pager.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, canWrite } from '../store'
 import { fmtRelative, fmtTime } from '../utils/format'
 
 const loading = ref(true)
+const pager = reactive({ q: '', limit: 50, offset: 0, total: 0 })
+watch(() => pager.q, () => { pager.offset = 0; load() })
 const schedules = ref([])
 const showEditor = ref(false)
 const editing = ref(null)
@@ -43,8 +46,9 @@ const form = reactive({
 async function load() {
   loading.value = true
   try {
-    const res = await api.schedules()
+    const res = await api.schedules({ q: pager.q, limit: pager.limit, offset: pager.offset })
     schedules.value = res.schedules || []
+    pager.total = res.total || 0
   } catch (err) {
     toastErr(err.message, '加载计划任务失败')
   } finally {
@@ -129,6 +133,7 @@ onMounted(load)
 <template>
   <div>
     <div class="toolbar">
+      <input class="input" style="max-width: 260px" v-model="pager.q" placeholder="搜索名称 / 目标" />
       <span class="dim small">共 {{ schedules.length }} 条计划任务 · 使用 5 段 cron 表达式（分 时 日 月 周）</span>
       <div class="spacer" style="flex: 1" />
       <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
@@ -181,6 +186,12 @@ onMounted(load)
             </tbody>
           </table>
         </div>
+        <Pager
+          :total="pager.total"
+          v-model:limit="pager.limit"
+          v-model:offset="pager.offset"
+          @change="load"
+        />
       </div>
     </div>
 

@@ -293,12 +293,14 @@ func (s *Server) handleScanResults(w http.ResponseWriter, r *http.Request) {
 // ---- policies ----
 
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
-	pols, err := s.app.Store.ListPolicies()
+	q := r.URL.Query()
+	limit, offset := pageArgs(q)
+	pols, total, err := s.app.Store.ListPoliciesPage(strings.TrimSpace(q.Get("q")), limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"policies": pols, "total": len(pols)})
+	writeJSON(w, http.StatusOK, map[string]any{"policies": pols, "total": total, "limit": limit, "offset": offset})
 }
 
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +452,9 @@ func (s *Server) handleMonitorStop(w http.ResponseWriter, r *http.Request) {
 // ---- schedules ----
 
 func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
-	list, err := s.app.Store.ListSchedules()
+	q := r.URL.Query()
+	limit, offset := pageArgs(q)
+	list, total, err := s.app.Store.ListSchedulesPage(strings.TrimSpace(q.Get("q")), limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -468,7 +472,7 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, rw)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"schedules": out, "total": len(out)})
+	writeJSON(w, http.StatusOK, map[string]any{"schedules": out, "total": total, "limit": limit, "offset": offset})
 }
 
 func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {

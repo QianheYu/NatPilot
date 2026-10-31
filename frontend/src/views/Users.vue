@@ -1,14 +1,17 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import Modal from '../components/Modal.vue'
+import Pager from '../components/Pager.vue'
 import Switch from '../components/Switch.vue'
 import ChangePassword from '../components/ChangePassword.vue'
 import { store, toastOk, toastErr } from '../store'
 import { fmtTime } from '../utils/format'
 
 const loading = ref(true)
+const pager = reactive({ q: '', limit: 50, offset: 0, total: 0 })
+watch(() => pager.q, () => { pager.offset = 0; load() })
 const users = ref([])
 const showEditor = ref(false)
 const editing = ref(null)
@@ -21,8 +24,9 @@ const form = reactive({ username: '', display_name: '', email: '', role: 'operat
 async function load() {
   loading.value = true
   try {
-    const res = await api.users()
+    const res = await api.users({ q: pager.q, limit: pager.limit, offset: pager.offset })
     users.value = res.users || []
+    pager.total = res.total || 0
   } catch (err) {
     toastErr(err.message, '加载用户失败')
   } finally {
@@ -109,6 +113,7 @@ onMounted(() => {
     </div>
     <template v-else>
     <div class="toolbar">
+      <input class="input" style="max-width: 260px" v-model="pager.q" placeholder="搜索用户名 / 显示名 / 邮箱" />
       <span class="dim small">共 {{ users.length }} 个账号 · 权限：admin 全权 / operator 可写 / viewer 只读</span>
       <div class="spacer" style="flex: 1" />
       <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
@@ -156,6 +161,12 @@ onMounted(() => {
             </tbody>
           </table>
         </div>
+        <Pager
+          :total="pager.total"
+          v-model:limit="pager.limit"
+          v-model:offset="pager.offset"
+          @change="load"
+        />
       </div>
     </div>
 

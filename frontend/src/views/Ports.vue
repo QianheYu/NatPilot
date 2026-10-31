@@ -5,6 +5,7 @@ import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import GroupCheckbox from '../components/GroupCheckbox.vue'
 import Modal from '../components/Modal.vue'
+import Pager from '../components/Pager.vue'
 import TagInput from '../components/TagInput.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
@@ -26,7 +27,7 @@ const ports = ref([])
 const total = ref(0)
 const counts = ref({})
 const selected = ref(new Set())
-const filters = reactive({ q: '', status: '', host: '', limit: 500, open_only: true })
+const filters = reactive({ q: '', status: '', host: '', limit: 50, offset: 0, open_only: true })
 const showScan = ref(false)
 const showEditor = ref(false)
 const editing = ref(null)
@@ -191,6 +192,7 @@ async function load() {
       status: filters.status,
       host: filters.host,
       limit: filters.limit,
+    offset: filters.offset,
       open_only: filters.open_only ? 'true' : '',
     })
     ports.value = res.ports || []
@@ -474,6 +476,13 @@ onMounted(() => {
           </tbody>
         </table>
       </div>
+      <Pager
+        :total="total"
+        :limit="filters.limit"
+        :offset="filters.offset"
+        @update:limit="(v) => { filters.limit = v; filters.offset = 0; load() }"
+        @update:offset="(v) => { filters.offset = v; load() }"
+      />
       </div>
     </div>
 

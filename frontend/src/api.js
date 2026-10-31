@@ -124,7 +124,7 @@ export const api = {
   previewScan: (body) => post('/api/scans/preview', body),
 
   // policies
-  policies: () => get('/api/policies'),
+  policies: (query) => get('/api/policies', query),
   createPolicy: (body) => post('/api/policies', body),
   updatePolicy: (id, body) => put(`/api/policies/${id}`, body),
   deletePolicy: (id) => del(`/api/policies/${id}`),
@@ -155,7 +155,7 @@ export const api = {
   interfaces: () => get('/api/network/interfaces'),
 
   // schedules
-  schedules: () => get('/api/schedules'),
+  schedules: (query) => get('/api/schedules', query),
   createSchedule: (body) => post('/api/schedules', body),
   updateSchedule: (id, body) => put(`/api/schedules/${id}`, body),
   deleteSchedule: (id) => del(`/api/schedules/${id}`),
@@ -172,7 +172,7 @@ export const api = {
   exportURL: (format) => `/api/export?format=${format || 'json'}`,
 
   // users
-  users: () => get('/api/users'),
+  users: (query) => get('/api/users', query),
   createUser: (body) => post('/api/users', body),
   updateUser: (id, body) => put(`/api/users/${id}`, body),
   deleteUser: (id) => del(`/api/users/${id}`),

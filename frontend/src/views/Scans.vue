@@ -1,14 +1,16 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
+import Pager from '../components/Pager.vue'
 import { toastOk, toastErr } from '../store'
 import { fmtRelative, fmtTime, scanStatusInfo } from '../utils/format'
 import { useLive } from '../composables/useLive'
 
 const loading = ref(true)
+const pager = reactive({ limit: 50, offset: 0, total: 0 })
 const scans = ref([])
 const total = ref(0)
 const running = ref(0)
@@ -18,9 +20,10 @@ const detailPorts = ref([])
 async function load() {
   loading.value = true
   try {
-    const res = await api.scans({ limit: 60 })
+    const res = await api.scans({ limit: pager.limit, offset: pager.offset })
     scans.value = res.scans || []
     total.value = res.total || 0
+    pager.total = res.total || 0
     running.value = res.running || 0
   } catch (err) {
     toastErr(err.message, '加载扫描记录失败')
@@ -139,6 +142,12 @@ onMounted(load)
             </tbody>
           </table>
         </div>
+        <Pager
+          :total="pager.total"
+          v-model:limit="pager.limit"
+          v-model:offset="pager.offset"
+          @change="load"
+        />
       </div>
     </div>
 

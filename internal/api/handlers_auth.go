@@ -121,12 +121,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 // ---- users ----
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := s.app.Store.ListUsers()
+	q := r.URL.Query()
+	limit, offset := pageArgs(q)
+	users, total, err := s.app.Store.ListUsersPage(strings.TrimSpace(q.Get("q")), limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users, "total": len(users)})
+	writeJSON(w, http.StatusOK, map[string]any{"users": users, "total": total, "limit": limit, "offset": offset})
 }
 
 type userRequest struct {

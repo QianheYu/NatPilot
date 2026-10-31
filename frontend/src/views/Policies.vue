@@ -1,15 +1,18 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
+import Pager from '../components/Pager.vue'
 import Switch from '../components/Switch.vue'
 import PolicyFields from '../components/PolicyFields.vue'
 import { toastOk, toastErr, canWrite } from '../store'
 import { specPortCount } from '../utils/format'
 
 const loading = ref(true)
+const pager = reactive({ q: '', limit: 50, offset: 0, total: 0 })
+watch(() => pager.q, () => { pager.offset = 0; load() })
 const policies = ref([])
 const monitor = ref({ active: false, interval_seconds: 0, policy_count: 0, targets: [] })
 const showEditor = ref(false)
@@ -38,8 +41,12 @@ const form = reactive({
 async function load() {
   loading.value = true
   try {
-    const [p, m] = await Promise.all([api.policies(), api.monitor()])
+    const [p, m] = await Promise.all([
+      api.policies({ q: pager.q, limit: pager.limit, offset: pager.offset }),
+      api.monitor(),
+    ])
     policies.value = p.policies || []
+    pager.total = p.total || 0
     monitor.value = m.monitor || {}
   } catch (err) {
     toastErr(err.message, '加载策略失败')
@@ -188,6 +195,7 @@ onMounted(load)
     </div>
 
     <div class="toolbar">
+      <input class="input" style="max-width: 260px" v-model="pager.q" placeholder="搜索策略名称 / 说明 / 端口" />
       <span class="dim small">共 {{ policies.length }} 条策略（按优先级从高到低匹配第一条命中的规则）</span>
       <div class="spacer" style="flex: 1" />
       <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
@@ -245,6 +253,12 @@ onMounted(load)
             </tbody>
           </table>
         </div>
+        <Pager
+          :total="pager.total"
+          v-model:limit="pager.limit"
+          v-model:offset="pager.offset"
+          @change="load"
+        />
       </div>
     </div>
 
