@@ -301,6 +301,94 @@ natpilot events list --level warn --limit 50
 
 ---
 
+## 构建产物（服务端 / 桌面版 / 镜像）
+
+三种产物来自**同一份代码**，区别只在构建链走到哪一步。共同前提是：前端必须先构建，
+因为控制台是通过 `go:embed` 打进 Go 可执行文件的。
+
+```bash
+cd frontend && npm ci && npm run build && cd ..
+# 关键一步：Vite 会清理输出目录，可能删掉 git 跟踪的占位文件，
+# 缺了它 go:embed 会失败（go build 直接报错）
+git checkout -- internal/webui/dist/placeholder.html
+```
+
+### 1. 服务端单文件
+
+```bash
+make build                 # 当前平台 → bin/natpilot
+make cross                 # 六个平台 → dist/<os>-<arch>/natpilot[.exe]
+make build VERSION=0.2.0   # 注入版本/提交/构建时间（ldflags）
+```
+
+`CGO_ENABLED=0` 是默认值（SQLite 用纯 Go 的 modernc.org/sqlite），所以六个目标
+都能从任意主机交叉编译，不需要交叉工具链，也不需要 gcc。
+
+`make cross-extra` 另外产出 **linux/arm (v7)** 与 **linux/386**（路由器、NAS、老式 x86）。
+freebsd 暂不支持：`internal/netutil` 的路由/邻居表查询是按平台实现的
+（linux / darwin / windows），补齐 `route_freebsd.go`、`neigh_freebsd.go` 后才能加。
+
+### 构建矩阵
+
+| 目标 | 平台 / 架构 | 产物 |
+| --- | --- | --- |
+| `make build` | 当前平台 | `bin/natpilot` |
+| `make cross` | linux amd64/arm64 · darwin amd64/arm64 · windows amd64/arm64 | `dist/<os>-<arch>/natpilot[.exe]` |
+| `make cross-extra` | linux arm/v7 · linux 386 | 同上 |
+| `make desktop` | Windows / macOS / Linux（需在目标平台打包） | 安装包 / 便携目录 |
+| `make docker` | 当前平台单架构镜像 | `natpilot:<ver>` |
+| `make docker-multi` | linux amd64 + arm64 + arm/v7 多架构清单 | 推送到镜像仓库 |
+| `make docker-bake` | 同上（docker-bake.hcl，含 SBOM/来源证明） | 推送到镜像仓库 |
+| `make docker-load` | 仅本机架构，载入本地 daemon | 供 compose 使用 |
+
+### 2. 桌面版（Electron）
+
+```bash
+make desktop      # = make build（含前端）→ cd desktop && npm install && npm run dist
+```
+
+产物在 `desktop/release/`（Windows: NSIS 安装包 + win-unpacked；macOS: dmg/zip；
+Linux: AppImage/deb）。打包配置里 `extraResources` 把 `bin/natpilot` 放到
+`resources/bin/`——asar 内的可执行文件无法直接运行，所以服务端必须留在 asar 外。
+
+离线或无法签名时的等价命令（本仓库的 Windows 便携包就是这样产出的）：
+
+```powershell
+npx electron-builder --win --dir `
+  --config.electronDist="desktop/node_modules/electron/dist" `
+  --config.win.signAndEditExecutable=false
+```
+
+`--dir` 只产出免安装目录；把它压缩即得便携版。
+
+### 3. 容器镜像
+
+```bash
+make docker                       # natpilot:0.1.0 + natpilot:latest
+docker build -t natpilot:dev .    # 等价
+```
+
+Dockerfile 是三阶段构建（node 构建前端 → golang 编译并内嵌 → alpine 运行时，
+非 root），镜像里不需要 Node/Go/gcc。
+
+**网络模式决定能不能发现网关**：UPnP/PCP 发现依赖组播，bridge 网络下容器通常收不到，
+表现为"服务正常但永远发现不到网关"。需要自动发现时用：
+
+```bash
+docker compose -f docker-compose.hostnet.yml up -d   # 仅 Linux 宿主
+```
+
+### 常见构建陷阱
+
+| 陷阱 | 后果 | 规避 |
+| --- | --- | --- |
+| 未恢复 `placeholder.html` | `go:embed` 失败，构建中断 | 构建后执行 `git checkout -- internal/webui/dist/placeholder.html` |
+| 跳过前端直接 `go build` | 界面显示"前端未构建"引导页 | 用 `make all` / `make desktop`，别单独 `make build` |
+| electron-builder 离线/签名失败 | 打包中断 | `--config.electronDist` + `--config.win.signAndEditExecutable=false` |
+| bridge 网络跑 Docker | 永远发现不到网关 | 用 `docker-compose.hostnet.yml` |
+
+---
+
 ## 部署方式
 
 ### A. 服务端 / Web
@@ -388,6 +476,34 @@ npm run dist:linux    # release/NatPilot-x.y.z.AppImage / .deb
 > 为什么托盘只在 Electron 里做：macOS 的 `NSStatusItem` 需要 Objective-C 运行时，Linux 的系统托盘需要
 > StatusNotifierItem（D-Bus）或 GTK，两条路都绕不开 cgo 或自研协议栈，会破坏「`CGO_ENABLED=0` +
 > 任意机器交叉编译」。Electron 自带这三种平台托盘实现，所以桌面版统一走 Electron。
+
+#### 桌面壳自身设置（launcher.json）
+
+启动器的配置与 Web 控制台的「系统设置」是**两套**：系统设置改的是服务端 config.json，
+启动器设置改的是 Electron 壳怎么拉起服务。配置位于
+`<userData>/launcher.json`（Windows: `%APPDATA%\natpilot-desktop\launcher.json`）。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `autoStartService` | `true` | 启动时是否自动拉起服务；关掉则只显示启动面板 |
+| `serverBinary` | `""` | 服务可执行文件路径，空 = 自动探测 |
+| `dataDir` | `""` | 数据目录，空 = `<userData>/natpilot` |
+| `host` | `"127.0.0.1"` | 服务监听地址（默认只绑回环） |
+| `port` | `0` | 固定端口；0 = 系统分配（失败自动换端口重试） |
+| `extraArgs` | `[]` | 追加给 `serve` 的参数 |
+| `closeToTray` | `true` | 关闭窗口驻留托盘；`false` 则关闭即退出 |
+| `startHiddenOnAutostart` | `true` | 开机自启时只驻留托盘 |
+| `checkUpdatesOnStart` | `true` | 启动后静默检查一次更新 |
+
+最终命令行为：
+
+```
+natpilot.exe --host <host> --port <port> --mode desktop --data-dir <dir> <extraArgs...> serve
+```
+
+**界面位置**：服务运行时在主窗口内的 **系统 → 启动器设置**（`#/launcher`）编辑；
+服务未运行时（Web 控制台本身不可用）自动弹出独立的启动面板，同样可修改配置并启动服务。
+该页面只在桌面版存在——浏览器访问时入口隐藏，直接访问会提示"仅桌面版可用"。
 
 ### D. systemd（Linux 服务）
 
@@ -481,6 +597,22 @@ log:
 
 ---
 
+### 保留策略（retention）
+
+扫描任务与日志审计的历史会无限增长，可在配置里限制条数与天数（设置页「数据保留」
+同样可改，改完 5 分钟内生效，无需重启）：
+
+```yaml
+retention:
+  events_days: 30    # 日志审计：保留天数（0 = 永久）
+  events_max: 5000   # 日志审计：最多保留条数（0 = 不限制）
+  scans_days: 30     # 扫描任务：保留天数
+  scans_max: 500     # 扫描任务：最多保留条数（连带删除其端口记录）
+```
+
+清理循环每 5 分钟运行一次；负值会被钳制为 0。旧的 `log.max_entries` /
+`log.retention_days` 仍然兼容（新配置优先）。
+
 ## 协议支持与降级策略
 
 ```
@@ -490,7 +622,10 @@ log:
   └─ PCP ANNOUNCE / NAT-PMP 公网地址请求（默认网关 + 常见路由器地址）
 
 下发阶段（每条规则独立尝试）
-  按 protocols 顺序逐个网关尝试 AddMapping
+  默认顺序（能力优先，能力不足才降级）：
+      IGD v2 (AddAnyPortMapping + 租约) → PCP → NAT-PMP → IGD v1
+  规则可用 gateway 字段固定到某一个网关；固定后只向该网关下发，
+  找不到即报错，不会回落到其它网关
      成功 → 记录 provider / 外部 IP / 外部端口 / 租约
      失败 → 记录失败原因，自动回退下一个协议/网关
 ```
@@ -625,12 +760,14 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/rules
 │   └── webui/               内嵌前端产物 (go:embed)
 ├── frontend/                独立前端子项目（Vue 3 + Vite）
 │   ├── src/views/           总览/规则/端口/扫描/策略/网关/主机/计划/日志/设置/用户/API 浏览器
-│   ├── src/components/      Badge / Modal / Switch / TagInput / EmptyState / ChangePassword
+│   │                        以及桌面版专用的「启动器设置」(#/launcher)
+│   ├── src/components/      Badge / Modal / Switch / TagInput / EmptyState / ChangePassword / Pager / RowDetailModal
 │   ├── src/api.js           API 客户端
 │   └── vite.config.js       产物直接输出到 ../internal/webui/dist
 
 
 ├── desktop/                 桌面版（Electron：窗口 + 三平台系统托盘）
+│   └── electron/launcher-*   启动器配置、设置页与 preload（launcher.json）
 ├── deploy/                  systemd 等示例
 
 ├── Dockerfile / docker-compose.yml / docker-compose.hostnet.yml / .env.example

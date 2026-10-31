@@ -4,6 +4,11 @@
 #   ./build.sh                 build frontend + native binaries into bin/
 #   ./build.sh --all           build ready-to-run bundles for all six targets
 #   ./build.sh --frontend-only rebuild the SPA only
+#   ./build.sh --docker-multi  build a multi-arch image (linux/amd64,arm64,arm/v7)
+#
+# --docker-multi requires buildx with a docker-container builder and a registry
+# to push to (a multi-arch manifest cannot be loaded into the local daemon).
+# Override with PLATFORMS=... REGISTRY=... IMAGE=... BUILDER=...
 #
 # There is no C dependency (the SQLite driver is pure Go), so every target
 # cross-compiles from any host without a cross toolchain.
@@ -63,9 +68,31 @@ build_all() {
   done
 }
 
+# build_docker_multi builds and pushes one manifest covering every platform.
+# The Go/frontend stages cross-compile for TARGETARCH, so no QEMU is needed.
+build_docker_multi() {
+  platforms="${PLATFORMS:-linux/amd64,linux/arm64,linux/arm/v7}"
+  image="${IMAGE:-natpilot}"
+  registry="${REGISTRY:-}"
+  builder="${BUILDER:-natpilot-multiarch}"
+  tag="$image"
+  [ -n "$registry" ] && tag="$registry/$image"
+  echo "==> docker buildx (platforms: $platforms)"
+  docker buildx inspect "$builder" >/dev/null 2>&1 ||
+    docker buildx create --name "$builder" --driver docker-container >/dev/null
+  docker buildx build --builder "$builder" \
+    --platform "$platforms" \
+    --build-arg VERSION="$VERSION" \
+    --build-arg COMMIT="$COMMIT" \
+    --build-arg BUILD_DATE="$BUILD_DATE" \
+    -t "$tag:$VERSION" -t "$tag:latest" \
+    --push .
+}
+
 case "${1:-}" in
   --frontend-only) build_frontend ;;
   --all) build_frontend; build_all ;;
+  --docker-multi) build_docker_multi ;;
   *) build_frontend; build_native ;;
 esac
 echo "done"

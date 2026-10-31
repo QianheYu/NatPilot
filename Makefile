@@ -24,7 +24,7 @@ export CGO_ENABLED = 0
 
 TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: all build frontend cross dev test vet fmt tidy docker run clean help desktop
+.PHONY: all build frontend cross cross-extra dev test vet fmt tidy docker docker-builder docker-multi docker-bake docker-load run clean help desktop
 
 all: frontend build
 
@@ -57,6 +57,23 @@ cross: frontend
 	done
 	@echo "==> bundles"; @ls -1 dist
 
+# cross-extra adds the architectures that are not part of the default six:
+# 32-bit ARM (arm/v7, common on routers/NAS) and 386 (legacy x86).
+#
+# freebsd is intentionally absent: internal/netutil implements route/neighbour
+# lookups per platform (linux/darwin/windows) and has no freebsd file yet, so the
+# build fails with "undefined: platformRouteGateway". Add netutil/route_freebsd.go
+# + neigh_freebsd.go first if that target is needed.
+EXTRA_TARGETS := linux/arm linux/386
+cross-extra: frontend
+	@for t in $(EXTRA_TARGETS); do \
+	  os=$${t%%/*}; arch=$${t##*/}; \
+	  out=dist/$$os-$$arch; mkdir -p $$out; \
+	  echo "  -> $$out/"; \
+	  GOOS=$$os GOARCH=$$arch GOARM=7 go build -trimpath -ldflags "$(LDFLAGS)" -o $$out/$(BINARY) . || exit 1; \
+	done
+	@echo "==> extra bundles"; @ls -1 dist
+
 dev: build
 	./bin/$(BINARY) serve --port 8787
 
@@ -79,6 +96,46 @@ tidy:
 docker:
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) -t natpilot:$(VERSION) -t natpilot:latest .
+# ---------- multi-architecture images ----------
+# PLATFORMS lists the manifest entries to build. arm/v7 is included because the
+# Go toolchain cross-compiles it for free (GOARM is derived from TARGETVARIANT);
+# drop it if you do not need 32-bit ARM boards.
+PLATFORMS ?= linux/amd64,linux/arm64,linux/arm/v7
+IMAGE     ?= natpilot
+BUILDER   ?= natpilot-multiarch
+REGISTRY  ?=
+
+# A docker-container builder is required for multi-platform output; the default
+# "docker" driver cannot produce a manifest list.
+docker-builder:
+	@docker buildx inspect $(BUILDER) >/dev/null 2>&1 || \
+		docker buildx create --name $(BUILDER) --driver docker-container >/dev/null
+
+# docker-multi builds one manifest covering every platform in PLATFORMS.
+# --push is mandatory: the local daemon cannot store a multi-arch manifest.
+docker-multi: docker-builder
+	docker buildx build --builder $(BUILDER) \
+		--platform $(PLATFORMS) \
+		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-t $(if $(REGISTRY),$(REGISTRY)/,)$(IMAGE):$(VERSION) \
+		-t $(if $(REGISTRY),$(REGISTRY)/,)$(IMAGE):latest \
+		--push .
+
+# docker-bake is the same build driven by docker-bake.hcl (declarative, easier
+# to extend with more tags/registries). Override with VERSION=/COMMIT=/REGISTRY=.
+docker-bake: docker-builder
+	@docker buildx create --name $(BUILDER) --driver docker-container >/dev/null 2>&1 || true
+	VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE) REGISTRY=$(REGISTRY) \
+		docker buildx bake --builder $(BUILDER) -f docker-bake.hcl --push
+
+# docker-load builds only the host platform and loads it into the local daemon,
+# which is what you want for `docker compose -f docker-compose.hostnet.yml up`.
+docker-load: docker-builder
+	docker buildx build --builder $(BUILDER) --load \
+		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
 
 run: build
 	./bin/$(BINARY) --data-dir ./data serve

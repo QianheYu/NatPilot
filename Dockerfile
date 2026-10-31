@@ -1,15 +1,41 @@
 # syntax=docker/dockerfile:1
 #
-# Multi-stage build:
+# Multi-stage, multi-architecture build.
+#
 #   1. frontend  -> builds the Vue SPA with vite
 #   2. backend   -> compiles the Go server with the SPA embedded
 #   3. runtime   -> minimal alpine image running as a non-root user
 #
-# The SQLite driver is pure Go (modernc.org/sqlite), so CGO is off. That means
-# no gcc/musl-dev anywhere and a statically linked binary.
+# Cross-compilation strategy:
+#   The frontend and backend stages run on the *build* platform
+#   (--platform=$BUILDPLATFORM) and emit artifacts for the *target* platform
+#   (TARGETOS/TARGETARCH/TARGETVARIANT). This is much faster than running the
+#   compilers under QEMU emulation, and it works because the SQLite driver is
+#   pure Go (modernc.org/sqlite) so CGO stays off: no gcc, no libc concerns,
+#   one static binary per architecture.
+#
+#   Single-arch image for the host:
+#       docker build -t natpilot:dev .
+#   Multi-arch manifest (buildx + a registry to push to):
+#       docker buildx build --platform linux/amd64,linux/arm64 \
+#         -t registry.example.com/natpilot:0.1.0 --push .
+#   Or via make:
+#       make docker-multi       # amd64 + arm64 (+ arm/v7), pushes
+#       make docker-bake        # same, driven by docker-bake.hcl
+#
+# Docker cannot load a multi-arch manifest into the local daemon, so multi-arch
+# targets always push. Use the single-arch target for local runs.
+
+# TARGET* are supplied by BuildKit for every build (they default to the build
+# platform for a plain `docker build`), so single-arch builds keep working.
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
 
 # ---------- stage 1: frontend ----------
-FROM node:22-alpine AS frontend
+# Runs on the build platform: the SPA is architecture independent, there is no
+# reason to emulate another architecture just to run vite.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /src/frontend
 # Install dependencies (dev dependencies are required for the vite build).
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -19,22 +45,30 @@ COPY frontend/ ./
 RUN mkdir -p /src/internal/webui/dist && npm run build
 
 # ---------- stage 2: backend ----------
-FROM golang:1.26-alpine AS backend
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS backend
+# Re-declare in this stage: ARGs are per-stage scoped.
+ARG TARGETOS=linux
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG VERSION=0.1.0
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # Bring in the freshly built SPA so go:embed picks it up.
 COPY --from=frontend /src/internal/webui/dist ./internal/webui/dist
-ARG VERSION=0.1.0
-ARG COMMIT=unknown
-ARG BUILD_DATE=unknown
 ENV CGO_ENABLED=0
-RUN go build -trimpath \
+# GOARM only matters for linux/arm/v6|v7: it is derived from TARGETVARIANT
+# ("v7" -> "7") and stays empty for amd64/arm64, where Go ignores it.
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \
+    go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
       -o /out/natpilot .
 
 # ---------- stage 3: runtime ----------
+# No --platform here: this stage must be the *target* architecture.
 FROM alpine:3.20
 # No sqlite-libs: the SQLite engine is compiled into the binary.
 RUN apk add --no-cache ca-certificates tzdata iproute2 wget \

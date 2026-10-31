@@ -5,6 +5,7 @@ param(
     [switch]$Test,
     [switch]$Vet,
     [switch]$Electron,
+    [switch]$DockerMulti,
     [string]$Version = $(if ($env:VERSION) { $env:VERSION } else { "0.1.0" })
 )
 
@@ -18,6 +19,8 @@ $ErrorActionPreference = "Stop"
 #   .\build.ps1 -FrontendOnly   rebuild the SPA only
 #   .\build.ps1 -NoFrontend     binaries only (SPA already built)
 #   .\build.ps1 -Test / -Vet    run tests / static checks
+#   .\build.ps1 -DockerMulti    build + push a multi-arch image
+#                               (linux/amd64,arm64,arm/v7; needs buildx + registry)
 #
 # There is no C dependency (the SQLite driver is pure Go), so every target
 # cross-compiles from Windows without a toolchain.
@@ -122,6 +125,28 @@ if ($Vet) { Run-Vet; exit 0 }
 if ($FrontendOnly) { Build-Frontend; exit 0 }
 
 if (-not $NoFrontend) { Build-Frontend }
+if ($DockerMulti) {
+    # 多架构清单必须 --push：本地 docker daemon 无法保存多平台镜像。
+    $platforms = if ($env:PLATFORMS) { $env:PLATFORMS } else { "linux/amd64,linux/arm64,linux/arm/v7" }
+    $image = if ($env:IMAGE) { $env:IMAGE } else { "natpilot" }
+    $registry = $env:REGISTRY
+    $builder = if ($env:BUILDER) { $env:BUILDER } else { "natpilot-multiarch" }
+    $tag = if ($registry) { "$registry/$image" } else { $image }
+    $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    Write-Host "==> docker buildx (platforms: $platforms)" -ForegroundColor Cyan
+    docker buildx inspect $builder *> $null
+    if ($LASTEXITCODE -ne 0) {
+        docker buildx create --name $builder --driver docker-container *> $null
+    }
+    docker buildx build --builder $builder `
+        --platform $platforms `
+        --build-arg VERSION=$Version `
+        --build-arg COMMIT=$commit `
+        --build-arg BUILD_DATE=$buildDate `
+        -t "${tag}:$Version" -t "${tag}:latest" `
+        --push .
+    exit $LASTEXITCODE
+}
 if ($Electron) { Build-Native; Build-Electron }
 elseif ($All) { Build-All }
 else { Build-Native }
