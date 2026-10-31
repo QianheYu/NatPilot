@@ -689,6 +689,9 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 控制台页面本身是本地服务提供的可信页面；这里只额外暴露启动器配置 IPC，
+      // 用于在同一个窗口的「启动器设置」页里管理 Electron 壳。
+      preload: path.join(__dirname, 'launcher-preload.js'),
     },
   })
   mainWindow.loadURL(url)
@@ -764,12 +767,12 @@ function updateTray() {
 // openSettings brings the console up on the 系统设置 page, which is where the
 // runtime configuration lives (settings that need a new process, such as the
 // listening port or TLS, take effect after 托盘 → 重启服务).
-async function openSettings() {
+async function openSettings(hash = '#/settings') {
   try {
     const url = serverURL || (await ensureServer())
     showWindow()
     if (mainWindow && !mainWindow.isDestroyed()) {
-      await mainWindow.loadURL(`${url}/#/settings`)
+      await mainWindow.loadURL(`${url}/${hash}`)
     }
   } catch (err) {
     if (!quitting) {
@@ -975,7 +978,7 @@ function trayTemplate() {
     },
     { type: 'separator' },
     { label: '打开控制台', click: () => showWindow() },
-    { label: '启动器设置…', click: () => openLauncherWindow() },
+    { label: '启动器设置…', click: () => openSettings('#/launcher') },
     { label: '系统设置…', click: () => openSettings() },
     {
       label: running ? '停止服务' : '启动服务',

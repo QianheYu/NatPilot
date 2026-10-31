@@ -45,8 +45,10 @@ const live = useLive((ev) => {
 const admin = computed(() => store.identity.role === 'admin' || !store.identity.authenticated)
 // 免登录(桌面)模式没有独立的用户体系，只有内置管理员。
 const userManagement = computed(() => store.meta.user_management !== false)
-const navModules = computed(() => visibleModules(admin.value, userManagement.value))
-const pages = computed(() => flatPages(admin.value, userManagement.value))
+// 桌面版才有 Electron 启动器（preload 注入 window.launcher）
+const isDesktop = typeof window !== 'undefined' && !!window.launcher
+const navModules = computed(() => visibleModules(admin.value, userManagement.value, isDesktop))
+const pages = computed(() => flatPages(admin.value, userManagement.value, isDesktop))
 const isLogin = computed(() => route.name === 'login')
 const pageTitle = computed(() => route.meta.title || 'NatPilot')
 const pageModule = computed(() => route.meta.group || '')

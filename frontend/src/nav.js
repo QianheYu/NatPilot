@@ -85,6 +85,12 @@ export const modules = [
         desc: '配置项与运行时参数',
         admin: true,
       }),
+      page('/launcher', 'launcher', '启动器设置', '⛭', () => import('./views/LauncherSettings.vue'), {
+        desc: '服务启动方式、监听端口与桌面壳行为',
+        admin: true,
+        // 只有桌面版(有 Electron preload)才有启动器可配置
+        desktop: true,
+      }),
       page('/swagger', 'swagger', 'API 浏览器', '⟐', () => import('./views/SwaggerView.vue'), {
         desc: 'REST 接口文档与调试',
         admin: true,
@@ -98,18 +104,20 @@ export const modules = [
 //
 // userManagement=false means the process runs as a single built-in administrator
 // (desktop / 免登录), where user & permission management has no meaning.
-export function visibleModules(isAdmin, userManagement = true) {
+export function visibleModules(isAdmin, userManagement = true, isDesktop = false) {
   return modules
     .map((m) => ({
       ...m,
-      items: m.items.filter((i) => (isAdmin || !i.admin) && (userManagement || !i.userManagement)),
+      items: m.items.filter(
+        (i) => (isAdmin || !i.admin) && (userManagement || !i.userManagement) && (isDesktop || !i.desktop),
+      ),
     }))
     .filter((m) => m.items.length > 0)
 }
 
 // flatPages is the searchable index used by the command palette.
-export function flatPages(isAdmin, userManagement = true) {
-  return visibleModules(isAdmin, userManagement).flatMap((m) =>
+export function flatPages(isAdmin, userManagement = true, isDesktop = false) {
+  return visibleModules(isAdmin, userManagement, isDesktop).flatMap((m) =>
     m.items.map((i) => ({ ...i, module: m.title })),
   )
 }
