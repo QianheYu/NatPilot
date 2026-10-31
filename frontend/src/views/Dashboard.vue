@@ -158,7 +158,8 @@ onMounted(load)
         <div class="card-head"><h3>网关与协议</h3></div>
         <div class="card-body flush">
           <EmptyState v-if="!data.gateways.length" icon="⬡" title="尚未发现网关" hint="点击“发现网关”开始探测" />
-          <table v-else class="data">
+          <div v-else class="table-wrap">
+          <table class="data">
             <tbody>
               <tr v-for="g in data.gateways" :key="g.id">
                 <td>
@@ -173,6 +174,7 @@ onMounted(load)
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>
@@ -186,7 +188,8 @@ onMounted(load)
         </div>
         <div class="card-body flush">
           <EmptyState v-if="!data.recent_rules.length" icon="⇄" title="还没有映射规则" hint="在“端口映射管理”中新增" />
-          <table v-else class="data">
+          <div v-else class="table-wrap">
+          <table class="data">
             <tbody>
               <tr v-for="r in data.recent_rules" :key="r.id">
                 <td>
@@ -201,6 +204,7 @@ onMounted(load)
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
@@ -212,7 +216,8 @@ onMounted(load)
         </div>
         <div class="card-body flush">
           <EmptyState v-if="!data.pending_ports.length" icon="⌗" title="没有待处理端口" hint="可以运行一次本机扫描" />
-          <table v-else class="data">
+          <div v-else class="table-wrap">
+          <table class="data">
             <tbody>
               <tr v-for="p in data.pending_ports" :key="p.id">
                 <td>
@@ -224,6 +229,7 @@ onMounted(load)
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>
