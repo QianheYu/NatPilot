@@ -399,7 +399,7 @@ onMounted(() => {
         <table class="data tree">
       <colgroup>
         <col style="width: 56px" /><col style="width: 74px" /><col style="width: 130px" /><col style="width: 60px" /><col style="width: 76px" />
-        <col style="width: 104px" /><col style="width: 176px" /><col style="width: 96px" /><col style="width: 82px" /><col style="width: 232px" />
+        <col style="width: 104px" /><col style="width: 176px" /><col style="width: 96px" /><col style="width: 82px" /><col style="width: 306px" />
       </colgroup>
           <thead>
             <tr>

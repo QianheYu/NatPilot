@@ -217,7 +217,7 @@ onMounted(load)
                 <td><Switch :model-value="p.enabled" :disabled="!canWrite()" @update:model-value="(v) => toggle(p, v)" /></td>
                 <td>
                   <div>{{ p.name }}</div>
-                  <div class="small mute">{{ p.description || '' }}</div>
+                  <div class="small mute ellipsis" :title="p.description || ''">{{ p.description || '' }}</div>
                 </td>
                 <td>
                   <Badge>{{ targetKindLabel(p.match_target_kind) }}</Badge>

@@ -119,7 +119,7 @@ onMounted(load)
                   {{ s.target_kind === 'local' ? '本机' : s.target_kind === 'mac' ? 'MAC ' + s.target_ref : s.target_ref }}
                   <div v-if="s.hosts_count" class="mute small">{{ s.hosts_count }} 台主机</div>
                 </td>
-                <td class="mono small mute">{{ s.ports_spec }}</td>
+                <td class="mono small mute ellipsis" :title="s.ports_spec">{{ s.ports_spec }}</td>
                 <td><span class="badge">{{ s.trigger }}</span></td>
                 <td class="small">
                   开放 {{ s.open_count || 0 }} · 新增 {{ s.new_count || 0 }}

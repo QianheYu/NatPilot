@@ -814,3 +814,59 @@ table.data td.right > .btn {
   row-gap: 4px;
   vertical-align: middle;
 }
+
+/* ---- 表格内长文本截断：只显示一部分, 悬停(title)看全文 ---- */
+.table-wrap > table.data td.ellipsis,
+.table-wrap > table.data td.ellipsis div,
+.table-wrap > table.data td .ellipsis {
+  max-width: 240px;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 表格操作列：按钮保持一行, 统一紧凑尺寸与配色 ----
+   以前列宽不够 + flex-wrap 导致按钮竖排; 现在列有最小宽度并禁止换行。 */
+.table-wrap > table.data td.right,
+.table-wrap > table.data td.actions {
+  min-width: 200px;
+}
+
+.table-wrap > table.data td.right .cell-actions,
+.table-wrap > table.data td.actions .cell-actions {
+  flex-wrap: nowrap;
+  justify-content: center;
+}
+
+/* 表格内按钮统一外观: 高 26px, 细边框, 次要操作用 ghost */
+table.data .cell-actions .btn {
+  min-height: 26px;
+  padding: 3px 9px;
+  font-size: 12px;
+  border-radius: 6px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+table.data .cell-actions .btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+table.data .cell-actions .btn.ghost:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+table.data .cell-actions .btn.ghost.danger {
+  color: var(--danger);
+}
+
+table.data .cell-actions .btn.ghost.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}

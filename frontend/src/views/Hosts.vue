@@ -470,7 +470,6 @@ onBeforeUnmount(clearPoll)
                 <th>接口</th>
                 <th>次数</th>
                 <th>最近</th>
-                <th>监控</th>
                 <th class="right">操作</th>
               </tr>
             </thead>
@@ -489,7 +488,7 @@ onBeforeUnmount(clearPoll)
                 <td class="small mute">{{ h.interface || '—' }}</td>
                 <td class="small mute">{{ h.seen_count }}</td>
                 <td class="small mute nowrap">{{ fmtRelative(h.last_seen) }}</td>
-                <td>
+                <td class="right">
                   <div class="cell-actions">
                     <button
                       class="btn sm ghost"
@@ -497,7 +496,7 @@ onBeforeUnmount(clearPoll)
                       :title="h.mac ? '为此主机添加监控策略' : '该主机没有 MAC 地址，无法按 MAC 绑定监控'"
                       @click="openMonitor(h)"
                     >
-                      监控<span v-if="policyCount(h)" class="badge accent" style="margin-left: 6px">{{ policyCount(h) }}</span>
+                      监控<span v-if="policyCount(h)" class="badge accent" style="margin-left: 4px">{{ policyCount(h) }}</span>
                     </button>
                     <button
                       class="btn sm ghost"
@@ -507,10 +506,8 @@ onBeforeUnmount(clearPoll)
                     >
                       扫描端口
                     </button>
+                    <button class="btn sm ghost danger" :disabled="!canWrite()" @click="removeHost(h)">移除</button>
                   </div>
-                </td>
-                <td class="right">
-                  <button class="btn sm ghost" :disabled="!canWrite()" @click="removeHost(h)">移除</button>
                 </td>
               </tr>
             </tbody>
