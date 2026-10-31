@@ -365,7 +365,7 @@ onMounted(() => {
       <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先 MAC，其次 IP）分组显示" @click="toggleGrouped">
         {{ grouped ? '已按主机分组' : '按主机分组' }}
       </button>
-      <button v-if="grouped" class="btn sm" @click="toggleAllGroups">{{ allCollapsed ? '全部展开' : '全部折叠' }}</button>
+      <button v-if="grouped" class="btn" @click="toggleAllGroups">{{ allCollapsed ? '全部展开' : '全部折叠' }}</button>
       <button class="btn" @click="reload"><span v-if="loading" class="spin">◌</span>刷新</button>
       <div class="spacer" style="flex: 1" />
       <template v-if="selected.size">
@@ -405,7 +405,6 @@ onMounted(() => {
               <span class="g-chip">{{ row.subnet.hosts.length }} 台主机</span>
               <span class="g-chip">{{ row.subnet.count }} 条</span>
               <span class="g-tags"><span v-for="s in groupSummary(itemsOf(row.subnet))" :key="s.label" class="g-tag" :class="s.kind">{{ s.label }} {{ s.count }}</span></span>
-              <span v-if="collapsedSubnets.has(row.subnet.key)" class="g-preview mono">{{ portPreview(itemsOf(row.subnet)) }}</span>
             </div>
           </td>
         </tr>
@@ -419,7 +418,6 @@ onMounted(() => {
               <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
               <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
               <span class="g-tags"><span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">{{ s.label }} {{ s.count }}</span></span>
-              <span v-if="collapsedHosts.has(row.host.key)" class="g-preview mono">{{ portPreview(itemsOf(row.host)) }}</span>
             </div>
           </td>
         </tr>

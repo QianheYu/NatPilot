@@ -171,7 +171,7 @@ onMounted(load)
                   </span>
                 </td>
                 <td class="small mute">{{ s.run_count }}</td>
-                <td>
+                <td class="right">
                   <div class="cell-actions">
                     <button class="btn sm ghost" :disabled="!canWrite()" @click="openEdit(s)">编辑</button>
                     <button class="btn sm danger" :disabled="!canWrite()" @click="remove(s)">删除</button>

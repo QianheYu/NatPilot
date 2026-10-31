@@ -183,7 +183,7 @@ onMounted(load)
                 </td>
                 <td class="small mute nowrap">{{ fmtRelative(g.last_seen) }}</td>
                 <td><Switch :model-value="g.enabled" :disabled="!canWrite()" @update:model-value="(v) => toggleEnabled(g, v)" /></td>
-                <td>
+                <td class="right">
                   <div class="cell-actions">
                     <button class="btn sm" :disabled="gwKey(g) === preferred || !canWrite()" @click="prefer(g)">设为首选</button>
                     <button class="btn sm danger" :disabled="!canWrite()" @click="removeGw(g)">移除</button>

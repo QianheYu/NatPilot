@@ -752,3 +752,30 @@ html,
 .app-content {
   scrollbar-gutter: stable;
 }
+
+/* ---- 表头与单元格对齐：右对齐列的表头与内容必须一致 ----
+   以前只有 th 带 .right，td 没有，于是表头贴右、按钮/内容贴左，看起来"不居中"。
+   这里让 .right 与操作列(.actions)在表头和单元格上统一右对齐。 */
+table.data th.right,
+table.data td.right,
+table.data td.actions {
+  text-align: right;
+}
+
+/* inline-flex 让按钮组收缩到内容宽度, 再由单元格 text-align:right 贴住右边缘;
+   直接给块级 div 用 flex-end 时, 若单元格不是 flex 容器就会留出一大段空白。 */
+table.data td.right .cell-actions,
+table.data td.actions .cell-actions,
+table.data td.right > .btn {
+  display: inline-flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  vertical-align: middle;
+}
+
+/* 单元格内的按钮组按列宽自动换行，避免溢出被裁 */
+table.data td.right,
+table.data td.actions {
+  overflow: visible;
+}

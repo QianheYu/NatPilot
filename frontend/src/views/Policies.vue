@@ -235,7 +235,7 @@ onMounted(load)
                 <td>
                   <span v-for="t in p.tags" :key="t" class="tag">{{ t }}</span>
                 </td>
-                <td>
+                <td class="right">
                   <div class="cell-actions">
                     <button class="btn sm ghost" :disabled="!canWrite()" @click="openEdit(p)">编辑</button>
                     <button class="btn sm danger" :disabled="!canWrite()" @click="remove(p)">删除</button>

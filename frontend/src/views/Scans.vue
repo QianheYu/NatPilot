@@ -127,7 +127,7 @@ onMounted(load)
                 </td>
                 <td class="small mute">{{ (s.duration_ms / 1000).toFixed(1) }}s</td>
                 <td class="small mute nowrap">{{ fmtTime(s.started_at, true) }}</td>
-                <td>
+                <td class="right">
                   <div class="cell-actions">
                     <button class="btn sm" @click="openDetail(s)">结果</button>
                     <button class="btn sm" @click="promoteAll(s)">全部添加</button>

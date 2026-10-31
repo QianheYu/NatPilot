@@ -130,7 +130,7 @@ onMounted(load)
                   <Badge :kind="u.enabled ? 'ok' : 'default'">{{ u.enabled ? '启用' : '停用' }}</Badge>
                 </td>
                 <td class="small mute nowrap">{{ u.last_login_at ? fmtTime(u.last_login_at, true) : '从未登录' }}</td>
-                <td>
+                <td class="right">
                   <div class="cell-actions">
                     <button class="btn sm" @click="issueToken(u)">API 令牌</button>
                     <button class="btn sm ghost" @click="openEdit(u)">编辑</button>
