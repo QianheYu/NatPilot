@@ -17,6 +17,11 @@ const LABEL_ATTR = 'data-label'
 
 // labelTable copies the header text of each column onto the matching cells.
 function labelTable(table) {
+  if (table.classList.contains('tree')) {
+    table.removeAttribute(STACK_ATTR)
+    return
+  }
+
   const headers = Array.from(table.querySelectorAll('thead th')).map((th) =>
     (th.textContent || '').trim().replace(/\s+/g, ' '),
   )
