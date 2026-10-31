@@ -641,7 +641,7 @@ onBeforeUnmount(clearPoll)
                   <td class="small">{{ actionLabel(p.auto_action) }}</td>
                   <td class="mono small">{{ p.host_ip || '—' }}</td>
                   <td class="right">
-                    <button class="btn sm ghost" :disabled="!canWrite()" @click="removePolicy(p)">删除</button>
+                    <button class="btn sm ghost danger" :disabled="!canWrite()" @click="removePolicy(p)">删除</button>
                   </td>
                 </tr>
               </tbody>

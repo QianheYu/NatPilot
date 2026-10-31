@@ -999,3 +999,73 @@ table.data .cell-actions .btn.ghost.danger {
 .table-wrap table.data td > div:not(.progress):not(.cell-actions):empty {
   display: none;
 }
+
+/* ---- 豁免：单行不换行但也不能省略的列 ----
+   主机:端口、标签、徽标这类内容必须完整显示，不参与 280px 截断。 */
+.table-wrap table.data td.mono,
+.table-wrap table.data td:has(.tag),
+.table-wrap table.data td:has(.badge),
+.table-wrap table.data td:has(.tag-list) {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* ---- 分组行(收起/展开)恢复 flex 布局 ----
+   上面的"单元格内 div 变行内"规则误伤了树表分组行的 .gt-group，
+   导致整行被压成行内文本、样式与原设计不同。这里排除带 colspan 的单元格。 */
+.table-wrap table.data td[colspan] > div,
+.table-wrap table.data td > div.gt-group {
+  display: flex;
+}
+
+.table-wrap table.data td[colspan] > div::before,
+.table-wrap table.data td > div.gt-group::before {
+  content: none;
+}
+
+/* ---- 删除类按钮：常规与悬停都为红色 ----
+   统一 .danger 在按钮、ghost 按钮、表格按钮上的表现，避免有的页面删除按钮
+   仍是中性色。 */
+.table-wrap table.data .cell-actions .btn.danger,
+.table-wrap table.data .cell-actions .btn.danger.ghost,
+.table-wrap table.data .cell-actions .btn.danger:disabled {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger-soft) 55%, transparent);
+}
+
+.table-wrap table.data .cell-actions .btn.danger:hover:not(:disabled),
+.table-wrap table.data .cell-actions .btn.danger.ghost:hover:not(:disabled) {
+  color: #fff;
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+/* ---- 树形表格改为自动列宽 ----
+   table-layout: fixed 会让 主机:端口 / 标签 列被硬性裁切（固定 130px 装不下
+   "192.168.1.10:8080"，标签多了也会被截）。这些内容必须完整且不换行，
+   所以树表用 auto 布局：列按内容撑开，整体超出时由 .table-wrap 横向滚动。 */
+.table-wrap table.data.tree {
+  table-layout: auto;
+  width: auto;
+  min-width: 100%;
+}
+
+/* 分组行内容必须是 flex（上面的行内化规则会把它压成 inline） */
+.table-wrap table.data td[colspan] > div,
+.table-wrap table.data td > div.gt-group {
+  display: flex !important;
+}
+
+.table-wrap table.data td[colspan] > div::before,
+.table-wrap table.data td > div.gt-group::before {
+  content: none !important;
+}
+
+/* 树表内所有单元格都不做省略号截断（内容完整显示，靠容器滚动） */
+.table-wrap table.data.tree td {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}

@@ -132,7 +132,7 @@ onMounted(load)
                     <button class="btn sm" @click="openDetail(s)">结果</button>
                     <button class="btn sm" @click="promoteAll(s)">全部添加</button>
                     <button v-if="s.status === 'running'" class="btn sm danger" @click="cancel(s)">取消</button>
-                    <button v-else class="btn sm ghost" @click="remove(s)">删除</button>
+                    <button v-else class="btn sm ghost danger" @click="remove(s)">删除</button>
                   </div>
                 </td>
               </tr>
