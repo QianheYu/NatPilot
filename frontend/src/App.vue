@@ -43,8 +43,10 @@ const live = useLive((ev) => {
 })
 
 const admin = computed(() => store.identity.role === 'admin' || !store.identity.authenticated)
-const navModules = computed(() => visibleModules(admin.value))
-const pages = computed(() => flatPages(admin.value))
+// 免登录(桌面)模式没有独立的用户体系，只有内置管理员。
+const userManagement = computed(() => store.meta.user_management !== false)
+const navModules = computed(() => visibleModules(admin.value, userManagement.value))
+const pages = computed(() => flatPages(admin.value, userManagement.value))
 const isLogin = computed(() => route.name === 'login')
 const pageTitle = computed(() => route.meta.title || 'NatPilot')
 const pageModule = computed(() => route.meta.group || '')

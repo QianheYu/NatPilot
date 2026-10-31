@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import api from '../api'
 import Badge from '../components/Badge.vue'
 import Modal from '../components/Modal.vue'
@@ -88,11 +88,26 @@ async function issueToken(u) {
 
 const roleKind = (r) => ({ admin: 'danger', operator: 'accent', viewer: 'default' })[r] || 'default'
 
-onMounted(load)
+// 免登录(桌面)模式：只有一个内置管理员，本页不适用。
+const userManagement = computed(() => store.meta.user_management !== false)
+
+onMounted(() => {
+  if (userManagement.value) load()
+})
 </script>
 
 <template>
   <div>
+    <div v-if="!userManagement" class="card">
+      <div class="card-body">
+        <h3 style="margin: 0 0 6px">桌面模式：单一管理员</h3>
+        <p class="small dim" style="margin: 0">
+          NatPilot 当前以桌面模式运行（本机免登录），只有一个内置管理员，并拥有全部权限。
+          该模式下不支持多用户、角色与访问令牌管理；如需多账号，请以服务模式部署并开启登录。
+        </p>
+      </div>
+    </div>
+    <template v-else>
     <div class="toolbar">
       <span class="dim small">共 {{ users.length }} 个账号 · 权限：admin 全权 / operator 可写 / viewer 只读</span>
       <div class="spacer" style="flex: 1" />
@@ -199,5 +214,6 @@ onMounted(load)
         <button class="btn primary" @click="navigator.clipboard && navigator.clipboard.writeText(tokenResult.token)">复制</button>
       </template>
     </Modal>
+    </template>
   </div>
 </template>

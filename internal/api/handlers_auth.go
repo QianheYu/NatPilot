@@ -38,6 +38,8 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"mode":            cfg.EffectiveMode(),
 		"auth_enabled":    s.app.Auth.Enabled(),
 		"auth_required":   cfg.AuthRequired(),
+		// 桌面/免登录模式只有一个内置管理员，不支持多用户与权限管理。
+		"user_management": cfg.AuthRequired(),
 		"frontend_built":  webui.HasFrontend(),
 		"protocols":       cfg.Mapper.Protocols,
 		"protocol_labels": protocolLabels(),
@@ -136,7 +138,29 @@ type userRequest struct {
 	Password    string `json:"password"`
 }
 
+// userManagementDisabled reports whether multi-user management is unavailable.
+//
+// Desktop (免登录) mode runs as a single built-in administrator: there is nobody to
+// log in as anyone else and no password to protect, so creating or editing accounts
+// would only produce unreachable logins. The API rejects those calls instead of
+// silently accepting them.
+func (s *Server) userManagementDisabled() bool {
+	return !s.app.Config.AuthRequired()
+}
+
+func (s *Server) rejectUserManagement(w http.ResponseWriter) bool {
+	if !s.userManagementDisabled() {
+		return false
+	}
+	writeError(w, http.StatusForbidden,
+		"桌面模式（免登录）只有一个内置管理员且拥有全部权限，不支持用户与权限管理")
+	return true
+}
+
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	if s.rejectUserManagement(w) {
+		return
+	}
 	var req userRequest
 	if err := decodeJSONLoose(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -196,6 +220,9 @@ func validRole(role string) bool {
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	if s.rejectUserManagement(w) {
+		return
+	}
 	id, err := pathInt(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid user id")
@@ -251,6 +278,9 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if s.rejectUserManagement(w) {
+		return
+	}
 	id, err := pathInt(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid user id")
@@ -276,6 +306,9 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUserToken(w http.ResponseWriter, r *http.Request) {
+	if s.rejectUserManagement(w) {
+		return
+	}
 	id, err := pathInt(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid user id")

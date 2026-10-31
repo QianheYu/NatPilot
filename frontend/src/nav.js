@@ -69,6 +69,8 @@ export const modules = [
       page('/users', 'users', '用户与权限', '☺', () => import('./views/Users.vue'), {
         desc: '账号、角色与访问令牌',
         admin: true,
+        // 免登录(桌面)模式只有内置管理员 -> 该页整体不可用
+        userManagement: true,
       }),
       page('/events', 'events', '日志与审计', '≡', () => import('./views/Events.vue'), {
         desc: '事件流与操作审计记录',
@@ -93,15 +95,21 @@ export const modules = [
 
 // visibleModules drops the admin-only pages for non-administrators. It also
 // drops a whole module once nothing inside it is visible.
-export function visibleModules(isAdmin) {
+//
+// userManagement=false means the process runs as a single built-in administrator
+// (desktop / 免登录), where user & permission management has no meaning.
+export function visibleModules(isAdmin, userManagement = true) {
   return modules
-    .map((m) => ({ ...m, items: m.items.filter((i) => isAdmin || !i.admin) }))
+    .map((m) => ({
+      ...m,
+      items: m.items.filter((i) => (isAdmin || !i.admin) && (userManagement || !i.userManagement)),
+    }))
     .filter((m) => m.items.length > 0)
 }
 
 // flatPages is the searchable index used by the command palette.
-export function flatPages(isAdmin) {
-  return visibleModules(isAdmin).flatMap((m) =>
+export function flatPages(isAdmin, userManagement = true) {
+  return visibleModules(isAdmin, userManagement).flatMap((m) =>
     m.items.map((i) => ({ ...i, module: m.title })),
   )
 }
