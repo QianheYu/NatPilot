@@ -224,7 +224,7 @@ onMounted(load)
                   <div v-if="p.mac_patterns" class="mono small mute">{{ p.mac_patterns }}</div>
                   <div v-else-if="p.mac" class="mono small mute">绑定 {{ p.mac }}</div>
                 </td>
-                <td class="mono small">
+                <td class="mono small ellipsis" :title="p.port_ranges ? p.port_ranges + ' (' + specPortCount(p.port_ranges) + ' 个端口)' : '全部端口'">
                   {{ p.port_ranges || '全部' }}
                   <span v-if="p.port_ranges" class="mute">({{ specPortCount(p.port_ranges) }})</span>
                   <div v-if="p.exclude_ranges" class="mute">排除 {{ p.exclude_ranges }}</div>
