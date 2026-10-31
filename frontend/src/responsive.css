@@ -1002,7 +1002,7 @@ table.data .cell-actions .btn.ghost.danger {
 
 /* ---- 豁免：单行不换行但也不能省略的列 ----
    主机:端口、标签、徽标这类内容必须完整显示，不参与 280px 截断。 */
-.table-wrap table.data td.mono,
+.table-wrap table.data td.mono:not(.ellipsis),
 .table-wrap table.data td:has(.tag),
 .table-wrap table.data td:has(.badge),
 .table-wrap table.data td:has(.tag-list) {

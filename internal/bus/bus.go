@@ -82,7 +82,15 @@ func (e Event) Marshal() string {
 
 // Bridge mirrors logging records into the event log and the bus. It returns a
 // stop function.
-func Bridge(b *Bus, st *store.Store, maxEntries int, retentionDays int) func() {
+// Retention bounds how much history is kept; zero disables that dimension.
+type Retention struct {
+	EventsMax  int
+	EventsDays int
+	ScansMax   int
+	ScansDays  int
+}
+
+func Bridge(b *Bus, st *store.Store, retFn func() Retention) func() {
 	seen := make(chan struct{})
 	var mu sync.Mutex
 	last := map[string]time.Time{}
@@ -112,11 +120,11 @@ func Bridge(b *Bus, st *store.Store, maxEntries int, retentionDays int) func() {
 		}})
 	})
 
-	go pruneLoop(seen, st, maxEntries, retentionDays)
+	go pruneLoop(seen, st, retFn)
 	return func() { close(seen) }
 }
 
-func pruneLoop(done <-chan struct{}, st *store.Store, maxEntries, retentionDays int) {
+func pruneLoop(done <-chan struct{}, st *store.Store, retFn func() Retention) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
 	for {
@@ -124,12 +132,19 @@ func pruneLoop(done <-chan struct{}, st *store.Store, maxEntries, retentionDays 
 		case <-done:
 			return
 		case <-t.C:
-			if maxEntries > 0 {
-				_, _ = st.TrimEvents(maxEntries)
+			ret := retFn()
+			if ret.EventsMax > 0 {
+				_, _ = st.TrimEvents(ret.EventsMax)
 			}
 			_, _ = st.PurgeExpiredSessions()
-			if retentionDays > 0 {
-				_, _ = st.PurgeScans(retentionDays)
+			if ret.EventsDays > 0 {
+				_, _ = st.PurgeEventsOlderThan(ret.EventsDays)
+			}
+			if ret.ScansDays > 0 {
+				_, _ = st.PurgeScans(ret.ScansDays)
+			}
+			if ret.ScansMax > 0 {
+				_, _ = st.TrimScans(ret.ScansMax)
 			}
 		}
 	}

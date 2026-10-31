@@ -131,6 +131,17 @@ type Log struct {
 	Retention  int    `json:"retention_days" yaml:"retention_days"`
 }
 
+// Retention bounds how much history the database keeps. Zero means "no limit"
+// for the *_max fields and "keep forever" for the *_days fields.
+type Retention struct {
+	// EventsDays / EventsMax prune the audit log (日志与审计).
+	EventsDays int `json:"events_days" yaml:"events_days"`
+	EventsMax  int `json:"events_max" yaml:"events_max"`
+	// ScansDays / ScansMax prune completed scan tasks (扫描任务).
+	ScansDays int `json:"scans_days" yaml:"scans_days"`
+	ScansMax  int `json:"scans_max" yaml:"scans_max"`
+}
+
 // Config is the root configuration object.
 type Config struct {
 	App      App      `json:"app" yaml:"app"`
@@ -140,6 +151,7 @@ type Config struct {
 	Mapper   Mapper   `json:"mapper" yaml:"mapper"`
 	Auth     Auth     `json:"auth" yaml:"auth"`
 	Log      Log      `json:"log" yaml:"log"`
+	Retention Retention `json:"retention" yaml:"retention"`
 
 	Path string `json:"-" yaml:"-"`
 
@@ -213,6 +225,8 @@ func Default() *Config {
 		LockoutMinutes:  15,
 		TokenTTLHours:   720,
 	}
+	// 保留策略：默认保留一个月；条数上限防止日志/扫描记录无界增长。
+	c.Retention = Retention{EventsDays: 30, EventsMax: 5000, ScansDays: 30, ScansMax: 500}
 	c.Log = Log{
 		// 默认不记录：日志与审计页在用户手动开启前保持为空。
 		Level:      "off",
@@ -624,6 +638,20 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("invalid mapper.conflict_policy %q", c.Mapper.ConflictPolicy)
 	}
+	// Negative retention values are meaningless; clamp to the defaults.
+	if c.Retention.EventsDays < 0 {
+		c.Retention.EventsDays = 0
+	}
+	if c.Retention.EventsMax < 0 {
+		c.Retention.EventsMax = 0
+	}
+	if c.Retention.ScansDays < 0 {
+		c.Retention.ScansDays = 0
+	}
+	if c.Retention.ScansMax < 0 {
+		c.Retention.ScansMax = 0
+	}
+
 	if len(c.Mapper.Protocols) > 0 {
 		out := make([]string, 0, len(c.Mapper.Protocols))
 		seen := map[string]bool{}

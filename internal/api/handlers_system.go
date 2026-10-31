@@ -890,6 +890,12 @@ var allowedSettingKeys = newKeySet(
 	"log.max_entries",
 	"log.retention_days",
 
+	// 保留策略（日志审计 / 扫描任务）
+	"retention.events_days",
+	"retention.events_max",
+	"retention.scans_days",
+	"retention.scans_max",
+
 	"auth.enabled",
 	"auth.require_for_web",
 	"auth.session_ttl_hours",

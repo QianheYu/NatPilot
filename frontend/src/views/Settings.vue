@@ -15,6 +15,10 @@ const busy = reactive({})
 const draft = reactive({
   // 默认与后端一致：不记录。API 返回当前值时会被覆盖。
   'log.level': 'off',
+  'retention.events_days': 30,
+  'retention.events_max': 5000,
+  'retention.scans_days': 30,
+  'retention.scans_max': 500,
   'mapper.dry_run': false,
   'mapper.enabled': true,
   'mapper.default_lease_seconds': 86400,
@@ -223,6 +227,34 @@ onMounted(load)
           <div class="divider" />
           <h4 style="margin: 0 0 10px; font-size: 13px">修改我的密码</h4>
           <ChangePassword />
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>数据保留</h3></div>
+        <div class="card-body">
+          <div class="grid cols-2">
+            <label class="field">
+              <span>日志审计 · 最多保留条数</span>
+              <input v-model.number="draft['retention.events_max']" class="input" type="number" min="0" placeholder="0 = 不限制" />
+              <div class="hint">超出后自动删除最旧的记录。</div>
+            </label>
+            <label class="field">
+              <span>日志审计 · 保留天数</span>
+              <input v-model.number="draft['retention.events_days']" class="input" type="number" min="0" placeholder="0 = 永久保留" />
+              <div class="hint">早于该天数的记录会被清理。</div>
+            </label>
+            <label class="field">
+              <span>扫描任务 · 最多保留条数</span>
+              <input v-model.number="draft['retention.scans_max']" class="input" type="number" min="0" placeholder="0 = 不限制" />
+              <div class="hint">包含其开放端口记录一起清理。</div>
+            </label>
+            <label class="field">
+              <span>扫描任务 · 保留天数</span>
+              <input v-model.number="draft['retention.scans_days']" class="input" type="number" min="0" placeholder="0 = 永久保留" />
+            </label>
+          </div>
+          <p class="hint">清理任务每 5 分钟运行一次，修改后无需重启即可生效。</p>
         </div>
       </div>
 

@@ -118,6 +118,21 @@ func (s *Store) PurgeScans(days int) (int64, error) {
 	return res.RowsAffected()
 }
 
+// TrimScans keeps only the newest max scans (and their ports).
+func (s *Store) TrimScans(max int) (int64, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+	if _, err := s.db.Exec(`DELETE FROM ports WHERE scan_id IS NOT NULL AND scan_id NOT IN (SELECT id FROM scans ORDER BY id DESC LIMIT ?)`, max); err != nil {
+		return 0, err
+	}
+	res, err := s.db.Exec(`DELETE FROM scans WHERE id NOT IN (SELECT id FROM scans ORDER BY id DESC LIMIT ?)`, max)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // CountScansSince counts scans started after a timestamp.
 func (s *Store) CountScansSince(ts string) (int, error) {
 	var n int

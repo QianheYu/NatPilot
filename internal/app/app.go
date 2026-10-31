@@ -86,7 +86,16 @@ func Build(ctx context.Context, opts Options) (*App, error) {
 	}
 
 	b := bus.New()
-	stopBridge := bus.Bridge(b, st, cfg.Log.MaxEntries, cfg.Log.Retention)
+	// 每轮读取最新配置：设置页修改保留策略后无需重启即可生效。
+	stopBridge := bus.Bridge(b, st, func() bus.Retention {
+		c := cfg
+		return bus.Retention{
+			EventsMax:  firstNonZero(c.Retention.EventsMax, c.Log.MaxEntries),
+			EventsDays: firstNonZero(c.Retention.EventsDays, c.Log.Retention),
+			ScansMax:   c.Retention.ScansMax,
+			ScansDays:  firstNonZero(c.Retention.ScansDays, c.Log.Retention),
+		}
+	})
 
 	a := &App{
 		Store:         st,
@@ -296,3 +305,12 @@ func (a *App) registerSchedulerJobs() {
 
 // Ensure os import is used for diagnostics.
 var _ = os.Getenv
+
+// firstNonZero returns a unless it is zero, in which case b is used. It keeps the
+// legacy log.* retention settings working while the newer retention.* section wins.
+func firstNonZero(a, b int) int {
+	if a != 0 {
+		return a
+	}
+	return b
+}

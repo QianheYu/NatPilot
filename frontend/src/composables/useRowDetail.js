@@ -11,6 +11,18 @@ import { ref } from 'vue'
 
 export const rowDetail = ref(null)
 
+// 行内操作按钮的真实 DOM：保存在模块作用域（不放进响应式对象），
+// 详情弹窗里的按钮点击时直接触发它，保证与表格里的行为完全一致。
+let actionEls = []
+
+export function runRowAction(index) {
+  const el = actionEls[index]
+  if (!el) return
+  closeRowDetail()
+  // 让弹窗先关闭，避免原按钮打开的新弹窗被覆盖
+  setTimeout(() => el.click(), 0)
+}
+
 export function closeRowDetail() {
   rowDetail.value = null
 }
@@ -46,12 +58,22 @@ export function describeRow(tr) {
     if (!value) return
     rows.push({ label, value, mono: /mono/.test(td.className) })
   })
-  if (!rows.length) return null
+  // 操作列按钮：详情弹窗里以按钮形式提供同样的功能
+  actionEls = []
+  const actions = []
+  ;[...tr.querySelectorAll('.cell-actions button, td.actions button, td.right button')].forEach((btn) => {
+    const label = (btn.textContent || '').trim()
+    if (!label) return
+    actions.push({ label, disabled: btn.disabled })
+    actionEls.push(btn)
+  })
+
+  if (!rows.length && !actions.length) return null
 
   // 标题：优先用行里第一列的内容，其次用表名
   const first = rows[0]
   const title = first ? `${first.label}: ${first.value}`.slice(0, 80) : '行详情'
-  return { title, rows }
+  return { title, rows, actions }
 }
 
 let installed = false

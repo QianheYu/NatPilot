@@ -349,3 +349,14 @@ func joinAnd(parts []string) string {
 func nowMinusDays(days int) string {
 	return time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339Nano)
 }
+// PurgeEventsOlderThan deletes audit events older than the given number of days.
+func (s *Store) PurgeEventsOlderThan(days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	res, err := s.db.Exec(`DELETE FROM events WHERE created_at < ?`, nowMinusDays(days))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
