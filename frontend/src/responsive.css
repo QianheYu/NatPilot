@@ -882,3 +882,22 @@ html,
 .app-content {
   scrollbar-gutter: stable;
 }
+
+/* ---- 表格最小宽度：让表格在自己的容器里横向滚动，而不是压缩换行或撑破页面 ----
+   table.data 默认 width:100%，窄窗口下浏览器会把列压到极窄、文字逐字换行，看起来
+   "显示不全"。这里给一个最小宽度：表格因此溢出 .table-wrap(overflow-x:auto)，
+   滚动条出现在卡片内部；同时页面本身不会横向滚动(app-content 已限制 max-width)。 */
+.table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.table-wrap > table.data {
+  min-width: 720px;
+}
+
+@media (max-width: 900px) {
+  .table-wrap > table.data {
+    min-width: 640px;
+  }
+}
