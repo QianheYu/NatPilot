@@ -321,6 +321,8 @@ var postMigrations = []string{
 	// Host-bound policies (keyed by MAC) need a column on an existing database.
 	`ALTER TABLE policies ADD COLUMN mac TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS ix_policies_mac ON policies(mac)`,
+	// 规则可以固定到某个网关（多网关环境）。
+	`ALTER TABLE rules ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
 	// Policies that match a group of devices by hardware address.
 	`ALTER TABLE policies ADD COLUMN mac_patterns TEXT NOT NULL DEFAULT ''`,
 	// 早期版本把"按主机(MAC)绑定"的策略写成 match_target='host'，而合法类型只有

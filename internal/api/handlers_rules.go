@@ -23,8 +23,10 @@ type rulesRequest struct {
 	Note     string   `json:"note"`
 	Enabled  *bool    `json:"enabled"`
 	Source   string   `json:"source"`
-	TagsAdd  []string `json:"tags_add"`
-	TagsDel  []string `json:"tags_remove"`
+	// Gateway pins the rule to one gateway (kind|address|port); empty = automatic.
+	Gateway string   `json:"gateway"`
+	TagsAdd []string `json:"tags_add"`
+	TagsDel []string `json:"tags_remove"`
 }
 
 // ruleView is a rule enriched with live mapping state.
@@ -159,6 +161,7 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		Tags:     model.StringList(req.Tags),
 		Note:     req.Note,
 		Enabled:  enabled,
+		Provider: normalizeGatewayPin(req.Gateway),
 		Source:   orDef(req.Source, "manual"),
 	}
 	id, err := s.app.Store.CreateRule(rule)
@@ -317,6 +320,9 @@ func applyRuleRequest(rule *model.Rule, req *rulesRequest) error {
 	rule.Port = req.Port
 	rule.ExtPort = req.ExtPort
 	rule.Protocol = req.Protocol
+	// Always take the pin from the request: empty string means "back to automatic",
+	// so clearing it in the editor must actually unpin the rule.
+	rule.Provider = normalizeGatewayPin(req.Gateway)
 	if req.Tags != nil {
 		rule.Tags = model.StringList(req.Tags)
 	}
@@ -673,3 +679,14 @@ func serviceFor(port int) string {
 
 var _ = time.Now
 var _ = strconv.Itoa
+
+// normalizeGatewayPin trims a gateway pin. Accepted forms:
+// "kind|address|port" (the key used internally) or a bare kind is rejected, since
+// a kind alone cannot identify one gateway when several share it.
+func normalizeGatewayPin(v string) string {
+	pin := strings.TrimSpace(v)
+	if pin == "" {
+		return ""
+	}
+	return pin
+}

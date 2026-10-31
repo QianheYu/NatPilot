@@ -8,7 +8,7 @@ import (
 	"github.com/ekko-studio/natpilot/internal/model"
 )
 
-const ruleCols = `id, name, host, port, ext_port, protocol, tags, note, enabled, auto_created, source, created_at, updated_at`
+const ruleCols = `id, name, host, port, ext_port, protocol, tags, note, enabled, auto_created, source, provider, created_at, updated_at`
 
 func scanRule(sc interface{ Scan(...any) error }) (*model.Rule, error) {
 	r := &model.Rule{}
@@ -16,7 +16,7 @@ func scanRule(sc interface{ Scan(...any) error }) (*model.Rule, error) {
 	var createdAt, updatedAt model.Time
 	var tags model.StringList
 	err := sc.Scan(&r.ID, &r.Name, &r.Host, &r.Port, &r.ExtPort, &r.Protocol, &tags, &r.Note,
-		&enabled, &autoCreated, &r.Source, &createdAt, &updatedAt)
+		&enabled, &autoCreated, &r.Source, &r.Provider, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -47,9 +47,9 @@ func (s *Store) CreateRule(r *model.Rule) (int64, error) {
 	}
 	now := model.Time{}
 	_ = now.Scan(Now())
-	res, err := s.db.Exec(`INSERT INTO rules(name, host, port, ext_port, protocol, tags, note, enabled, auto_created, source, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		r.Name, r.Host, r.Port, r.ExtPort, r.Protocol, r.Tags, r.Note, b2i(r.Enabled), b2i(r.AutoCreated), orDefault(r.Source, "manual"), now, now)
+	res, err := s.db.Exec(`INSERT INTO rules(name, host, port, ext_port, protocol, tags, note, enabled, auto_created, source, provider, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.Name, r.Host, r.Port, r.ExtPort, r.Protocol, r.Tags, r.Note, b2i(r.Enabled), b2i(r.AutoCreated), orDefault(r.Source, "manual"), r.Provider, now, now)
 	if err != nil {
 		return 0, err
 	}
@@ -100,8 +100,8 @@ func (s *Store) UpdateRule(r *model.Rule) error {
 	}
 	now := model.Time{}
 	_ = now.Scan(Now())
-	_, err := s.db.Exec(`UPDATE rules SET name=?, host=?, port=?, ext_port=?, protocol=?, tags=?, note=?, enabled=?, auto_created=?, source=?, updated_at=? WHERE id=?`,
-		r.Name, r.Host, r.Port, r.ExtPort, r.Protocol, r.Tags, r.Note, b2i(r.Enabled), b2i(r.AutoCreated), r.Source, now, r.ID)
+	_, err := s.db.Exec(`UPDATE rules SET name=?, host=?, port=?, ext_port=?, protocol=?, tags=?, note=?, enabled=?, auto_created=?, source=?, provider=?, updated_at=? WHERE id=?`,
+		r.Name, r.Host, r.Port, r.ExtPort, r.Protocol, r.Tags, r.Note, b2i(r.Enabled), b2i(r.AutoCreated), r.Source, r.Provider, now, r.ID)
 	if err == nil {
 		r.UpdatedAt = now
 	}

@@ -159,6 +159,7 @@ async function loadHosts() {
 
 function reload() {
   load()
+  loadGateways()
   loadHosts()
 }
 const confirmState = ref(null)
@@ -172,7 +173,18 @@ const form = reactive({
   tags: [],
   note: '',
   enabled: true,
+  // '' = 自动（首选网关优先，其余按协议能力降级）
+  gateway: '',
 })
+
+// 网关列表：用于把规则固定到某一个网关（多网关环境）
+const gateways = ref([])
+const gatewayKey = (g) => `${g.kind}|${g.address}|${g.port}`
+const gatewayLabel = (g) => {
+  const kind = { igd2: 'IGD v2', igd1: 'IGD v1', pcp: 'PCP', natpmp: 'NAT-PMP', upnp: 'UPnP' }[g.kind] || g.kind
+  const name = g.name || g.model_name || ''
+  return `${kind} · ${g.address}:${g.port}${name ? ' · ' + name : ''}`
+}
 
 const tagSuggestions = computed(() => Object.keys(allTags.value || {}))
 
@@ -204,6 +216,7 @@ useLive((ev) => {
 })
 
 function openCreate() {
+  form.gateway = ''
   editing.value = null
   Object.assign(form, {
     name: '',
@@ -219,6 +232,7 @@ function openCreate() {
 }
 
 function openEdit(rule) {
+  form.gateway = rule.gateway || ''
   editing.value = rule
   Object.assign(form, {
     name: rule.name,
@@ -243,6 +257,7 @@ async function save() {
     tags: form.tags,
     note: form.note,
     enabled: form.enabled,
+    gateway: form.gateway || '',
   }
   if (!payload.port || payload.port < 1 || payload.port > 65535) {
     toastErr('内部端口必须在 1-65535 之间')
@@ -261,6 +276,7 @@ async function save() {
     }
     showEditor.value = false
     load()
+  loadGateways()
   } catch (err) {
     toastErr(err.message, '保存失败')
   } finally {
@@ -287,6 +303,7 @@ async function apply(rule) {
     if (res.error) toastWarn(res.error, '映射失败')
     else toastOk(`#${rule.id} 映射已生效`)
     load()
+  loadGateways()
   } catch (err) {
     toastErr(err.message, '同步失败')
   } finally {
@@ -307,6 +324,7 @@ async function doRemove() {
     if (res.gateway_error) toastWarn(res.gateway_error, '网关清理提示')
     confirmState.value = null
     load()
+  loadGateways()
   } catch (err) {
     toastErr(err.message, '删除失败')
   }
@@ -332,6 +350,7 @@ async function bulk(action, extra = {}) {
     const res = await api.bulkRules({ ids, action, ...extra })
     toastOk(`批量操作完成：${JSON.stringify(res.result)}`)
     load()
+  loadGateways()
   } catch (err) {
     toastErr(err.message, '批量操作失败')
   } finally {
@@ -339,8 +358,18 @@ async function bulk(action, extra = {}) {
   }
 }
 
+async function loadGateways() {
+  try {
+    const res = await api.gateways()
+    gateways.value = res.gateways || []
+  } catch {
+    gateways.value = []
+  }
+}
+
 onMounted(() => {
   load()
+  loadGateways()
   loadHosts()
 })
 </script>
@@ -487,6 +516,19 @@ onMounted(() => {
         <label class="field">
           <span>外部端口</span>
           <input v-model="form.ext_port" class="input" type="number" min="0" max="65535" placeholder="留空=与内网相同" />
+        </label>
+        <label class="field">
+          <span>网关（多网关环境可指定）</span>
+          <select v-model="form.gateway" class="select">
+            <option value="">自动（首选网关优先，按协议能力降级）</option>
+            <option v-for="g in gateways" :key="gatewayKey(g)" :value="gatewayKey(g)">
+              {{ gatewayLabel(g) }}
+            </option>
+            <option v-if="form.gateway && !gateways.some((g) => gatewayKey(g) === form.gateway)" :value="form.gateway">
+              {{ form.gateway }}（当前未发现）
+            </option>
+          </select>
+          <div class="hint">指定后只会向该网关下发，找不到时报错而不会回落到其它网关。</div>
         </label>
         <label class="field">
           <span>协议</span>

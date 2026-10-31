@@ -70,8 +70,11 @@ type Rule struct {
 	Enabled     bool       `json:"enabled"`
 	AutoCreated bool       `json:"auto_created"`
 	Source      string     `json:"source"` // manual|scan|import|api
-	CreatedAt   Time       `json:"created_at"`
-	UpdatedAt   Time       `json:"updated_at"`
+	// Provider pins the rule to one gateway (provider key, see providerKey).
+	// Empty means "automatic": preferred gateway first, then by protocol rank.
+	Provider  string `json:"gateway"`
+	CreatedAt Time   `json:"created_at"`
+	UpdatedAt Time   `json:"updated_at"`
 
 	// Join / computed fields (not persisted).
 	ExternalIP    string  `json:"external_ip,omitempty"`

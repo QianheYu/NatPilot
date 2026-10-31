@@ -431,6 +431,26 @@ func (m *Mapper) LastError() string {
 
 // candidates returns the providers that can carry the requested protocol, with
 // the preferred gateway first.
+// protocolRank orders gateway kinds by capability: newest/most capable first so a
+// downgrade only happens when the better protocols are unavailable.
+// igd2 (AddAnyPortMapping + leases) > pcp (explicit lifetime) > natpmp > igd1/upnp.
+func protocolRank(kind string) int {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case proto.KindIGD2:
+		return 0
+	case proto.KindPCP:
+		return 1
+	case proto.KindNATPMP:
+		return 2
+	case proto.KindIGD1:
+		return 3
+	case "upnp":
+		return 4
+	default:
+		return 9
+	}
+}
+
 func (m *Mapper) candidates(protoName string) []proto.DiscoveredGateway {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -446,6 +466,7 @@ func (m *Mapper) candidates(protoName string) []proto.DiscoveredGateway {
 	if pref != nil && supports(*pref, protoName) {
 		out = append(out, *pref)
 	}
+	rest := make([]proto.DiscoveredGateway, 0, len(m.providers))
 	for _, d := range m.providers {
 		if pref != nil && providerKey(d.Info) == m.preferred {
 			continue
@@ -453,9 +474,13 @@ func (m *Mapper) candidates(protoName string) []proto.DiscoveredGateway {
 		if !supports(d, protoName) {
 			continue
 		}
-		out = append(out, d)
+		rest = append(rest, d)
 	}
-	return out
+	// 除首选网关外，按协议能力从强到弱尝试（而不是按发现顺序）。
+	sort.SliceStable(rest, func(i, j int) bool {
+		return protocolRank(rest[i].Info.Kind) < protocolRank(rest[j].Info.Kind)
+	})
+	return append(out, rest...)
 }
 
 // supports reports whether a gateway can carry the requested protocol.
@@ -755,7 +780,23 @@ func (m *Mapper) ensureRule(ctx context.Context, r *model.Rule) ruleResult {
 	}
 
 	var lastErr error
-	for _, d := range m.candidates(mapping.Protocol) {
+	// A rule may be pinned to one gateway: honour it strictly instead of falling
+	// back, so the user's choice (e.g. the router that actually forwards) is not
+	// silently overridden by another gateway that happens to answer.
+	cands := m.candidates(mapping.Protocol)
+	if pinned := strings.TrimSpace(r.Provider); pinned != "" {
+		filtered := cands[:0]
+		for _, d := range cands {
+			if providerKey(d.Info) == pinned {
+				filtered = append(filtered, d)
+			}
+		}
+		cands = filtered
+		if len(cands) == 0 {
+			return ruleResult{err: fmt.Errorf("指定的网关 %q 当前不可用（未发现或不支持该协议）", pinned)}
+		}
+	}
+	for _, d := range cands {
 		cctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		result, err := d.Provider.AddMapping(cctx, mapping)
 		cancel()
@@ -920,7 +961,23 @@ func (m *Mapper) removeRule(ctx context.Context, r model.Rule) error {
 		ExternalPort: extPort,
 	}
 	var lastErr error
-	for _, d := range m.candidates(mapping.Protocol) {
+	// A rule may be pinned to one gateway: honour it strictly instead of falling
+	// back, so the user's choice (e.g. the router that actually forwards) is not
+	// silently overridden by another gateway that happens to answer.
+	cands := m.candidates(mapping.Protocol)
+	if pinned := strings.TrimSpace(r.Provider); pinned != "" {
+		filtered := cands[:0]
+		for _, d := range cands {
+			if providerKey(d.Info) == pinned {
+				filtered = append(filtered, d)
+			}
+		}
+		cands = filtered
+		if len(cands) == 0 {
+			return fmt.Errorf("指定的网关 %q 当前不可用（未发现或不支持该协议）", pinned)
+		}
+	}
+	for _, d := range cands {
 		if !hasCapability(d, "delete") {
 			continue
 		}

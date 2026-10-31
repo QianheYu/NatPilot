@@ -187,8 +187,10 @@ func Default() *Config {
 		EnableLANScan:    true,
 	}
 	c.Mapper = Mapper{
-		Enabled:          true,
-		Protocols:        []string{ProtoIGD2, ProtoIGD1, ProtoPCP, ProtoNATPMP},
+		Enabled: true,
+		// 能力优先: IGD v2(AddAnyPortMapping/租约) > PCP(显式生命周期) >
+		// NAT-PMP(简单) > IGD v1(最老的兼容协议)。降级顺序与功能完整度一致。
+		Protocols:        []string{ProtoIGD2, ProtoPCP, ProtoNATPMP, ProtoIGD1},
 		DiscoverInterval: 300,
 		RenewBefore:      120,
 		DefaultLease:     86400,
