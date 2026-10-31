@@ -155,7 +155,7 @@ onMounted(loadEvents)
                 <th style="width: 90px">级别</th>
                 <th style="width: 110px">来源</th>
                 <th>内容</th>
-                <th style="width: 104px">操作</th>
+                <th class="right" style="width: 104px">操作</th>
               </tr>
             </thead>
             <tbody>

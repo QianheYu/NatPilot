@@ -471,7 +471,7 @@ onBeforeUnmount(clearPoll)
                 <th>次数</th>
                 <th>最近</th>
                 <th>监控</th>
-                <th></th>
+                <th class="right">操作</th>
               </tr>
             </thead>
             <tbody>

@@ -779,3 +779,38 @@ table.data td.right,
 table.data td.actions {
   overflow: visible;
 }
+
+/* ---- 普通表格：保持最小宽度 + 内容不换行, 由 .table-wrap 横向滚动 ----
+   上一版替换文件尾部时丢了这段 min-width, 导致表格永远 width:100% 不溢出,
+   既滚不动又把内容挤成多行。 */
+.table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.table-wrap > table.data:not(.tree) {
+  min-width: 960px;
+}
+
+.table-wrap > table.data:not(.tree) th,
+.table-wrap > table.data:not(.tree) td {
+  white-space: nowrap;
+}
+
+/* ---- 操作列(及 right 列)：标题与内容统一居中 ----
+   标题居中于列, 按钮组也随之居中, 两者对齐一致。 */
+table.data th.right,
+table.data td.right,
+table.data td.actions {
+  text-align: center;
+}
+
+table.data td.right .cell-actions,
+table.data td.actions .cell-actions,
+table.data td.right > .btn {
+  display: inline-flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  vertical-align: middle;
+}
