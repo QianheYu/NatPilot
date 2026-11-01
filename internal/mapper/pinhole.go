@@ -251,13 +251,15 @@ func (m *Mapper) ensurePinhole(ctx context.Context, r *model.Rule) ruleResult {
 		err := fmt.Errorf("IPv6 pinhole 只支持 TCP/UDP，规则 #%d 的协议 %q 不受支持", r.ID, r.Protocol)
 		return m.failPinholeRule(r, target, err)
 	}
-	lease := m.effectiveLease(r)
+	// LeaseTime is a uint32 on the wire. Do the capping in int64: 1<<31 does not
+	// fit an `int` on 32-bit platforms (linux/arm, 386), where the untyped
+	// constant would overflow at compile time — exactly what broke the
+	// multi-arch image build.
+	const maxPinholeLease = int64(1) << 31
+	lease := int64(m.effectiveLease(r))
 	if lease <= 0 {
 		lease = 86400
 	}
-	// LeaseTime is uint32. Cap at ~68 years, which fits an int on every platform
-	// and is indistinguishable from "forever" in practice.
-	const maxPinholeLease = 1 << 31
 	if lease > maxPinholeLease {
 		lease = maxPinholeLease
 	}

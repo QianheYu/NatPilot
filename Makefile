@@ -86,6 +86,9 @@ test:
 vet:
 	go vet ./...
 	@for os in darwin windows; do GOOS=$$os go vet ./... || exit 1; done
+	# 32-bit targets catch `int` overflow of large constants (1<<31 etc.) that
+	# amd64 silently accepts — this is what broke the linux/arm multi-arch image.
+	@for arch in 386 arm; do GOOS=linux GOARCH=$$arch go vet ./... || exit 1; done
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './frontend/*' -not -path './.gocache/*')
