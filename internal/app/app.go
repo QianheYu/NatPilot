@@ -82,6 +82,17 @@ func Build(ctx context.Context, opts Options) (*App, error) {
 			if rejected := cfg.ApplyOverrides(overrides); len(rejected) > 0 {
 				logging.Warn("config", "ignored unknown persisted overrides", "keys", strings.Join(rejected, ","))
 			}
+			// 持久化覆盖项会盖过环境变量与默认值。security 相关的键被钉住时
+			// 必须说一声，否则"换了新镜像却仍然免登录"这种问题很难查。
+			if v, ok := overrides["auth.enabled"]; ok {
+				msg := "auth.enabled 被数据库中的持久化设置覆盖（会盖过环境变量与新默认值）；如需恢复按模式推导，请清除该覆盖项"
+				logging.Warn("config", msg, "persisted", v, "clear_with", `PATCH /api/settings {"auth.enabled": ""}`)
+				// 与 [SECURITY] 同理：默认 log.level=off 时用户什么都看不到，
+				// 而这正是"换了新镜像却仍然免登录"最难查的一环，必须直出 stderr。
+				if logging.LevelOf() == "off" {
+					fmt.Fprintf(os.Stderr, "\n[CONFIG] %s (persisted auth.enabled=%s)\n\n", msg, v)
+				}
+			}
 		}
 	}
 

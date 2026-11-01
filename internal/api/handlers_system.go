@@ -771,7 +771,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	applied, restartRequired, unsupported, err := s.applySettingOverrides(flat)
+	applied, restartRequired, unsupported, cleared, err := s.applySettingOverrides(flat)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -782,6 +782,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		"applied":          applied,
 		"restart_required": restartRequired,
 		"unsupported":      unsupported,
+		"cleared":          cleared,
 	})
 }
 
@@ -885,7 +886,7 @@ func sortedKeys(kv map[string]string) []string {
 
 // applySettingOverrides persists the given overrides and hot-applies only the ones
 // that are safe to change at runtime, reporting the rest as requiring a restart.
-func (s *Server) applySettingOverrides(kv map[string]string) (applied, restartRequired, unsupported []string, err error) {
+func (s *Server) applySettingOverrides(kv map[string]string) (applied, restartRequired, unsupported, cleared []string, err error) {
 	// Never return nil slices: they marshal to JSON null and the web console reads
 	// response.applied.length.
 	applied = []string{}
@@ -905,9 +906,18 @@ func (s *Server) applySettingOverrides(kv map[string]string) (applied, restartRe
 		if !allowedSetting(k) {
 			continue
 		}
+		// 空值 = "清除这条覆盖项"，回落到配置文件/环境变量/默认值。
+		// 没有这个出口，一次误保存就会把某个设置永久钉死在数据库里。
+		if strings.TrimSpace(v) == "" {
+			if serr := s.app.Store.DeleteSetting("config." + k); serr != nil {
+				return applied, restartRequired, unsupported, cleared, serr
+			}
+			cleared = append(cleared, k)
+			continue
+		}
 		if restartOnlySettings[k] {
 			if serr := s.app.Store.SetSetting("config."+k, v); serr != nil {
-				return applied, restartRequired, unsupported, serr
+				return applied, restartRequired, unsupported, cleared, serr
 			}
 			restartRequired = append(restartRequired, k)
 			continue
@@ -919,7 +929,7 @@ func (s *Server) applySettingOverrides(kv map[string]string) (applied, restartRe
 			continue
 		}
 		if serr := s.app.Store.SetSetting("config."+k, v); serr != nil {
-			return applied, restartRequired, unsupported, serr
+			return applied, restartRequired, unsupported, cleared, serr
 		}
 		// The log level is the one setting that must take effect immediately: the
 		// console offers "off" as the default, and toggling it has to stop (or
@@ -929,7 +939,7 @@ func (s *Server) applySettingOverrides(kv map[string]string) (applied, restartRe
 		}
 		applied = append(applied, k)
 	}
-	return applied, restartRequired, unsupported, nil
+	return applied, restartRequired, unsupported, cleared, nil
 }
 
 func flattenSettings(prefix string, in map[string]any, out map[string]string) {
@@ -1068,7 +1078,7 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	applied, restartRequired, unsupported, err := s.applySettingOverrides(kv)
+	applied, restartRequired, unsupported, cleared, err := s.applySettingOverrides(kv)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1079,6 +1089,7 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		"applied":          applied,
 		"restart_required": restartRequired,
 		"unsupported":      unsupported,
+		"cleared":          cleared,
 	})
 }
 

@@ -647,6 +647,31 @@ NatPilot: generated administrator password for "admin": xxxxxxxxxxxxxxxx
 > 非回环地址 + 未启用认证时，启动会向 stderr 打印 `[SECURITY] ...` 警告
 > （即使 `log.level=off` 也会输出），避免"免登录控制台暴露在网络上"却无人察觉。
 
+### 设置项的持久化覆盖（为什么改了默认值却不生效）
+
+Web 控制台保存设置时，会把改动写进 SQLite 的 `settings` 表（键名 `config.<key>`），
+**并在每次启动时重新应用到配置之上**——优先级高于配置文件、环境变量与默认值。
+
+所以升级镜像/改默认值后如果某个设置"看起来没生效"，先查有没有残留覆盖项：
+
+```bash
+curl -s http://<host>:8787/api/meta | jq .            # 看 auth_required 等
+# 已登录的情况下列出覆盖项
+curl -s -b cookie.txt http://<host>:8787/api/settings | jq .overrides
+```
+
+清除单个覆盖项（空值 = 清除，回落到文件/环境变量/默认值）：
+
+```bash
+curl -X PATCH http://<host>:8787/api/settings \
+  -H 'Content-Type: application/json' \
+  -b cookie.txt -d '{"auth.enabled": ""}'
+```
+
+或直接在「系统设置」页对应开关下方点「清除该覆盖项」。
+启动日志里若出现 `[CONFIG] ... 被数据库中的持久化设置覆盖` 或 `[SECURITY] ...`
+就说明属于这种情况。
+
 ### 保留策略（retention）
 
 扫描任务与日志审计的历史会无限增长，可在配置里限制条数与天数（设置页「数据保留」

@@ -4,7 +4,7 @@ import api from '../api'
 import Badge from '../components/Badge.vue'
 import Switch from '../components/Switch.vue'
 import ChangePassword from '../components/ChangePassword.vue'
-import { store, toastOk, toastErr } from '../store'
+import { store, toastOk, toastErr, toastWarn } from '../store'
 import { fmtTime, fmtUptime } from '../utils/format'
 
 const loading = ref(true)
@@ -36,6 +36,33 @@ const draft = reactive({
   'auth.require_for_web': true,
 })
 
+// 保存时只提交"改过的键"：以前把整份 draft 全量 PATCH，会把默认值也写成
+// 数据库里的持久化覆盖项，之后再改镜像/默认值都不生效（典型症状：
+// "换了新镜像，server 模式却仍然免登录"）。
+const snapshot = ref('')
+function takeSnapshot() {
+  snapshot.value = JSON.stringify(draft)
+}
+function changedKeys() {
+  let base = {}
+  try { base = JSON.parse(snapshot.value || '{}') } catch { base = {} }
+  return Object.keys(draft).filter((k) => JSON.stringify(draft[k]) !== JSON.stringify(base[k]))
+}
+
+async function clearOverride(key) {
+  try {
+    const res = await api.patchSettings({ [key]: '' })
+    if ((res.cleared || []).includes(key)) {
+      toastOk(`${key} 的持久化覆盖已清除，重启服务后按配置/默认值生效`)
+    } else {
+      toastWarn(`${key} 没有可清除的覆盖项`, '无需清理')
+    }
+    await load()
+  } catch (err) {
+    toastErr(err.message, '清除覆盖项失败')
+  }
+}
+
 async function load() {
   loading.value = true
   try {
@@ -44,6 +71,7 @@ async function load() {
     cfg.value = s.config || {}
     overrides.value = s.overrides || {}
     applyDraft(s.config || {})
+    takeSnapshot()
   } catch (err) {
     toastErr(err.message, '加载设置失败')
   } finally {
@@ -62,7 +90,14 @@ function applyDraft(c) {
 async function save() {
   busy.save = true
   try {
-    const res = await api.patchSettings({ ...draft })
+    const changed = changedKeys()
+    if (!changed.length) {
+      toastWarn('没有需要保存的改动', '未修改')
+      return
+    }
+    const payload = {}
+    for (const k of changed) payload[k] = draft[k]
+    const res = await api.patchSettings(payload)
     // 安全/网络边界类配置（http.mode、auth.enabled 等）只落库，重启后才生效。
     const applied = res.applied || []
     const pending = res.restart_required || []
@@ -215,6 +250,10 @@ onMounted(load)
         <div class="card-body">
           <label class="field row" style="gap: 10px">
             <Switch v-model="draft['auth.enabled']" :disabled="!store.identity.authenticated" />
+        <span v-if="overrides['auth.enabled'] !== undefined" class="small" style="color: var(--warn)">
+          数据库里存在持久化覆盖 auth.enabled={{ overrides['auth.enabled'] }}（会盖过环境变量与新默认值）
+          <button class="btn sm" style="margin-left: 8px" @click="clearOverride('auth.enabled')">清除该覆盖项</button>
+        </span>
             <span class="small dim">启用登录鉴权（web / 服务端部署建议开启；桌面模式免登录）</span>
           </label>
           <label class="field row" style="gap: 10px">
