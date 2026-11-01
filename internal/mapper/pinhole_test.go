@@ -101,16 +101,20 @@ func TestPinholeUniqueIDRecordRoundTrip(t *testing.T) {
 // A failed renewal must not forget the id of the live pinhole: otherwise the
 // rule could never delete it and it would linger until the lease expired.
 func TestFailPinholeRulePreservesExistingUniqueID(t *testing.T) {
-	m, _ := newMapperForTest(t)
-	r := &model.Rule{ID: 7, Name: "v6-web", Port: 8080, Protocol: model.ProtoTCP}
-	m.setRecord(7, model.MappingRecord{
-		RuleID: 7, Status: model.MapStatusActive, InternalHost: "2001:db8::5", InternalPort: 8080,
+	m, st := newMapperForTest(t)
+	ruleID, err := st.CreateRule(&model.Rule{Host: "2001:db8::5", Port: 8080, Protocol: model.ProtoTCP, Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateRule: %v", err)
+	}
+	r := &model.Rule{ID: ruleID, Name: "v6-web", Port: 8080, Protocol: model.ProtoTCP}
+	m.setRecord(ruleID, model.MappingRecord{
+		RuleID: ruleID, Status: model.MapStatusActive, InternalHost: "2001:db8::5", InternalPort: 8080,
 		Description: pinholeDescription("v6-web", 321),
 	})
 
 	m.failPinholeRule(r, "2001:db8::5", errors.New("gateway exploded"))
 
-	rec, ok := m.record(7)
+	rec, ok := m.record(ruleID)
 	if !ok {
 		t.Fatalf("failure was not recorded")
 	}
