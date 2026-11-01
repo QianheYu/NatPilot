@@ -113,9 +113,17 @@ func Build(ctx context.Context, opts Options) (*App, error) {
 	// unauthenticated admin console on the network, so say it out loud instead of
 	// letting the operator discover it later.
 	if !cfg.AuthRequired() && !cfg.IsLoopbackHost() {
-		logging.Warn("auth",
-			"the console is reachable from the network but authentication is disabled; start with --auth (or auth.enabled: true) to require login",
+		msg := "the console is reachable from the network but authentication is disabled; start with --auth (or auth.enabled: true) to require login"
+		logging.Warn("auth", msg,
 			"bind", cfg.EffectiveBindHost(), "mode", cfg.EffectiveMode())
+		// 这条是安全提示，不能因为 log.level=off（默认值）就消失：默认级别下
+		// 用户看不到任何 warning，于是把"免登录的控制台"暴露在网络上而毫不知情。
+		// 因此无论日志级别如何都直接写到 stderr。
+		if logging.LevelOf() == "off" {
+			fmt.Fprintf(os.Stderr,
+				"\n[SECURITY] %s\n           bind=%s mode=%s\n           现在你会看到一个免登录的控制台；设置 NATPILOT_AUTH=true 或 --auth 可强制登录。\n\n",
+				msg, cfg.EffectiveBindHost(), cfg.EffectiveMode())
+		}
 	}
 
 	a.Mapper = mapper.New(st, cfg, a)
