@@ -20,8 +20,8 @@ func TestHostProbeNormalize(t *testing.T) {
 	}
 
 	bad := []HostProbe{
-		{},                                // 缺 cidr
-		{CIDR: "not-a-cidr"},              // 非法 cidr
+		{},                                  // 缺 cidr
+		{CIDR: "not-a-cidr"},                // 非法 cidr
 		{CIDR: "10.0.0.0/8", SourceIP: "x"}, // 非法 source ip
 		{CIDR: "10.0.0.0/8", Ports: []int{0}},
 		{CIDR: "10.0.0.0/8", Ports: []int{70000}},

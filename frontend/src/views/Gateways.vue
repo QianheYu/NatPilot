@@ -7,6 +7,7 @@ import Modal from '../components/Modal.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, canWrite } from '../store'
 import { fmtRelative, gatewayKindInfo } from '../utils/format'
+import { fmtHostPort } from '../utils/netaddr'
 
 const loading = ref(true)
 const gateways = ref([])
@@ -176,7 +177,7 @@ onMounted(load)
                   <div>{{ g.name || '(未命名)' }}</div>
                   <div class="small mute">{{ g.manufacturer }} {{ g.model_name }}</div>
                 </td>
-                <td class="mono small">{{ g.address }}:{{ g.port }}</td>
+                <td class="mono small">{{ fmtHostPort(g.address, g.port) }}</td>
                 <td class="mono small">{{ g.external_ip || '—' }}</td>
                 <td>
                   <span v-for="c in g.capabilities" :key="c" class="tag">{{ c }}</span>
@@ -250,7 +251,7 @@ onMounted(load)
             <tr v-for="(m, i) in gwMappings" :key="i">
               <td class="small">{{ m.protocol }}</td>
               <td class="mono small">:{{ m.external_port }}</td>
-              <td class="mono small">{{ m.internal_host }}:{{ m.internal_port }}</td>
+              <td class="mono small">{{ fmtHostPort(m.internal_host, m.internal_port) }}</td>
               <td class="small mute">{{ m.lease_seconds ? m.lease_seconds + 's' : '永久' }}</td>
               <td class="small">{{ m.description || '—' }}</td>
             </tr>

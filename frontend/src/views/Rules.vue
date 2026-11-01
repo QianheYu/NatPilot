@@ -10,6 +10,7 @@ import TagInput from '../components/TagInput.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, protocolTag, shortProvider, statusInfo, truncate } from '../utils/format'
+import { fmtHostPort } from '../utils/netaddr'
 import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
@@ -460,8 +461,8 @@ onMounted(() => {
           </td>
                   <td class="mono small mute" data-label="ID">{{ row.item.id }}</td>
                   <td data-label="状态"><Badge :kind="statusInfo(row.item.mapping_status).kind" :dot="row.item.mapping_status === 'active'">{{ statusInfo(row.item.mapping_status).label }}</Badge></td>
-                  <td class="mono small" data-label="目标">{{ row.item.host }}:{{ row.item.port }}</td>
-                  <td class="mono small" data-label="外部映射"><span v-if="row.item.external_port">{{ row.item.external_ip || '?' }}:{{ row.item.external_port }}</span><span v-else class="mute">—</span></td>
+                  <td class="mono small" data-label="目标">{{ fmtHostPort(row.item.host, row.item.port) }}</td>
+                  <td class="mono small" data-label="外部映射"><span v-if="row.item.external_port">{{ fmtHostPort(row.item.external_ip || '?', row.item.external_port) }}</span><span v-else class="mute">—</span></td>
                   <td data-label="协议"><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
                   <td data-label="标签"><span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span><span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span></td>
                   <td data-label="名称">{{ row.item.name || '(未命名)' }}</td>
@@ -477,7 +478,7 @@ onMounted(() => {
                 <tr v-if="detailRows.has(row.item.id)" class="detail-row">
                   <td :colspan="10">
                     <div class="row wrap" style="gap: 20px">
-                      <span class="small"><span class="mute">目标</span> <span class="mono">{{ row.item.host }}:{{ row.item.port }}/{{ row.item.protocol }}</span></span>
+                      <span class="small"><span class="mute">目标</span> <span class="mono">{{ fmtHostPort(row.item.host, row.item.port) }}/{{ row.item.protocol }}</span></span>
                       <span class="small"><span class="mute">网关</span> {{ shortProvider(row.item.provider) || '—' }}</span>
                       <span class="small"><span class="mute">来源</span> {{ row.item.source || '—' }}</span>
                       <span class="small"><span class="mute">更新</span> {{ fmtRelative(row.item.updated_at) }}</span>
@@ -513,8 +514,8 @@ onMounted(() => {
         </label>
         <label class="field">
           <span>内网主机 (目标)</span>
-          <input v-model="form.host" class="input" placeholder="127.0.0.1 或 192.168.1.20" />
-          <div class="hint">留空或写 self 表示本机</div>
+          <input v-model="form.host" class="input" placeholder="192.168.1.10 或 [fd00::1]" />
+          <div class="hint">留空或写 self 表示本机；也接受 IPv6 字面量（可带方括号，如 [fd00::1]）</div>
         </label>
       </div>
       <div class="grid cols-3">
@@ -570,7 +571,7 @@ onMounted(() => {
     <Modal v-if="confirmState" title="确认删除" @close="confirmState = null">
       <p>
         确定要删除规则
-        <b class="mono">#{{ confirmState.item.id }} {{ confirmState.item.host }}:{{ confirmState.item.port }}</b>
+        <b class="mono">#{{ confirmState.item.id }} {{ fmtHostPort(confirmState.item.host, confirmState.item.port) }}</b>
         吗？该操作会同时向网关撤销映射（若已开启）。
       </p>
       <template #footer>

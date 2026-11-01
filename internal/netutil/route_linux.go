@@ -40,3 +40,15 @@ func platformRouteGateway() string {
 	}
 	return ""
 }
+
+// platformDefaultRoute6 reads the kernel IPv6 routing table. /proc/net/ipv6_route
+// is a plain file read and names the outgoing device, which a link-local next hop
+// needs to be usable; there is no /proc equivalent for the neighbour cache, but
+// there is one for routes.
+func platformDefaultRoute6() route6Info {
+	b, err := os.ReadFile("/proc/net/ipv6_route")
+	if err != nil {
+		return route6Info{}
+	}
+	return parseProcIPv6Route(string(b))
+}

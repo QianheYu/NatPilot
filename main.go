@@ -355,16 +355,27 @@ func reachableURLs(actual string) []struct{ label, url string } {
 		if err != nil {
 			return out
 		}
-		seen := 0
+		// v4 与 v6 分开限流：v4 地址通常排在前面，共用计数会让 v6 永远轮不到。
+		// link-local v6（fe80::/10）需要 %zone 才能访问，打印出来用户也点不开，
+		// 所以只列全局/ULA 地址。
+		seen4, seen6 := 0, 0
 		for _, i := range ifaces {
 			if i.Loopback || !i.Up || i.IP == "" {
 				continue
 			}
-			out = append(out, struct{ label, url string }{"lan url", "http://" + net.JoinHostPort(i.IP, port)})
-			seen++
-			if seen >= 4 {
-				break
+			if i.IsV6() {
+				if i.Scoped || seen6 >= 2 {
+					continue
+				}
+				out = append(out, struct{ label, url string }{"lan6 url", "http://" + netutil.JoinHostPort(i.IP, mustPort(port))})
+				seen6++
+				continue
 			}
+			if seen4 >= 4 {
+				continue
+			}
+			out = append(out, struct{ label, url string }{"lan url", "http://" + net.JoinHostPort(i.IP, port)})
+			seen4++
 		}
 	}
 	return out
@@ -459,3 +470,12 @@ func fatal(format string, a ...any) int {
 var _ = sort.Strings
 var _ = store.RuleFilter{}
 var _ = model.Rule{}
+
+// mustPort converts a numeric port string (already validated by SplitHostPort).
+func mustPort(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
+}

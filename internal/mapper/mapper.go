@@ -674,6 +674,11 @@ func (m *Mapper) detectConflicts(rules []model.Rule) {
 
 	used := map[string]int64{}
 	for _, r := range ordered {
+		// IPv6 pinholes forward the same address/port; there is no external port
+		// to collide over, so they never take part in conflict detection.
+		if decideRoute(r.Host, true) == routePinhole {
+			continue
+		}
 		ext := r.ExtPort
 		if ext == 0 {
 			// No explicit external port: the gateway assigns one, so there is
@@ -748,6 +753,20 @@ func (m *Mapper) ensureRule(ctx context.Context, r *model.Rule) ruleResult {
 		return ruleResult{err: fmt.Errorf("conflict with rule %d", other), changed: true}
 	}
 	m.mu.RUnlock()
+
+	// IPv6 rules need an IGDv2 firewall pinhole rather than an IPv4 NAT mapping.
+	// The decision happens before any v4-specific work so a v4-only network keeps
+	// exactly the previous behaviour.
+	switch route := decideRoute(r.Host, m.hasPinholeProvider()); route {
+	case routePinhole:
+		return m.ensurePinhole(ctx, r)
+	case routeUnsupportedIPv6:
+		target, _ := canonicalIPv6(r.Host)
+		if target == "" {
+			target = strings.TrimSpace(r.Host)
+		}
+		return m.failPinholeRule(r, target, m.ipv6UnsupportedError(r, target))
+	}
 
 	prev, hadPrev := m.record(r.ID)
 	if hadPrev && prev.Status == model.MapStatusActive && prev.ExternalPort > 0 {
@@ -950,6 +969,38 @@ func (m *Mapper) removeRule(ctx context.Context, r model.Rule) error {
 	if !ok {
 		rec = model.MappingRecord{RuleID: r.ID, Protocol: r.Protocol, InternalPort: r.Port}
 	}
+	var lastErr error
+	if target, isV6 := pinholeTarget(r, rec); isV6 {
+		// IPv6 rules own a pinhole, not a NAT mapping; DeletePinhole is a safe
+		// no-op when the gateway no longer offers the service.
+		lastErr = m.removePinhole(ctx, r, rec, target)
+	} else {
+		done := true
+		lastErr, done = m.removeNATMapping(ctx, r, rec)
+		if !done {
+			// A rule pinned to an unavailable gateway keeps its state, exactly as
+			// the v4-only implementation did: retrying later may still work.
+			return lastErr
+		}
+	}
+	m.delRecord(r.ID)
+	if err := m.store.DeleteMappingsForRule(r.ID); err != nil {
+		logging.Debug("mapper", "delete mapping rows failed", "error", err.Error())
+	}
+	if lastErr != nil {
+		logging.Warn("mapper", "delete mapping failed", "rule", r.ID, "error", lastErr.Error())
+	}
+	if m.ev != nil {
+		m.ev.Publish("mapping", fmt.Sprintf("removed mapping for rule #%d (%s/%d)", r.ID, r.Protocol, r.Port),
+			model.JSONMap{"rule_id": r.ID, "port": r.Port})
+	}
+	return lastErr
+}
+
+// removeNATMapping tears down an IPv4 NAT mapping (the historical behaviour).
+// done is false when a pinned gateway is unavailable, in which case the caller
+// must leave the local record untouched.
+func (m *Mapper) removeNATMapping(ctx context.Context, r model.Rule, rec model.MappingRecord) (lastErr error, done bool) {
 	extPort := rec.ExternalPort
 	if extPort == 0 {
 		extPort = r.Port
@@ -960,7 +1011,6 @@ func (m *Mapper) removeRule(ctx context.Context, r model.Rule) error {
 		InternalPort: r.Port,
 		ExternalPort: extPort,
 	}
-	var lastErr error
 	// A rule may be pinned to one gateway: honour it strictly instead of falling
 	// back, so the user's choice (e.g. the router that actually forwards) is not
 	// silently overridden by another gateway that happens to answer.
@@ -974,7 +1024,7 @@ func (m *Mapper) removeRule(ctx context.Context, r model.Rule) error {
 		}
 		cands = filtered
 		if len(cands) == 0 {
-			return fmt.Errorf("指定的网关 %q 当前不可用（未发现或不支持该协议）", pinned)
+			return fmt.Errorf("指定的网关 %q 当前不可用（未发现或不支持该协议）", pinned), false
 		}
 	}
 	for _, d := range cands {
@@ -990,18 +1040,7 @@ func (m *Mapper) removeRule(ctx context.Context, r model.Rule) error {
 		}
 		lastErr = err
 	}
-	m.delRecord(r.ID)
-	if err := m.store.DeleteMappingsForRule(r.ID); err != nil {
-		logging.Debug("mapper", "delete mapping rows failed", "error", err.Error())
-	}
-	if lastErr != nil {
-		logging.Warn("mapper", "delete mapping failed", "rule", r.ID, "error", lastErr.Error())
-	}
-	if m.ev != nil {
-		m.ev.Publish("mapping", fmt.Sprintf("removed mapping for rule #%d (%s/%d)", r.ID, r.Protocol, r.Port),
-			model.JSONMap{"rule_id": r.ID, "port": r.Port})
-	}
-	return lastErr
+	return lastErr, true
 }
 
 func hasCapability(d proto.DiscoveredGateway, cap string) bool {

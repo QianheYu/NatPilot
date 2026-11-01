@@ -29,3 +29,18 @@ func platformRouteGateway() string {
 	}
 	return ""
 }
+
+// platformDefaultRoute6 reads the Windows IPv6 routing table. `route print -6`
+// carries the interface index in its first column, which is enough to attribute
+// a link-local next hop to the interface that owns it.
+func platformDefaultRoute6() route6Info {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	out, err := oscmd.Run(ctx, 4*time.Second,
+		[]string{"route.exe", "route", `C:\Windows\System32\route.exe`}, "print", "-6")
+	if err != nil {
+		return route6Info{}
+	}
+	return parseRoutePrintWindows6(out)
+}

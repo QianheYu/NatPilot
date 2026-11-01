@@ -10,6 +10,7 @@ import TagInput from '../components/TagInput.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
+import { fmtHostPort } from '../utils/netaddr'
 import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
@@ -443,7 +444,7 @@ onMounted(() => {
             <input type="checkbox" :checked="selected.has(row.item.id)" @change="toggleSelect(row.item.id)" />
           </td>
                   <td data-label="状态"><Badge :kind="portStatusInfo(row.item.status).kind">{{ portStatusInfo(row.item.status).label }}</Badge></td>
-                  <td class="mono small" data-label="主机:端口">{{ row.item.host }}:{{ row.item.port }}</td>
+                  <td class="mono small" data-label="主机:端口">{{ fmtHostPort(row.item.host, row.item.port) }}</td>
                   <td data-label="协议"><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
                   <td class="small" data-label="服务">{{ row.item.service || '—' }}</td>
                   <td class="small dim" data-label="进程">{{ truncate(row.item.process, 30) || '—' }}</td>

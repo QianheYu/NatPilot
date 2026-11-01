@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -193,8 +194,18 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 
 func validateRuleRequest(req *rulesRequest, requirePort bool) error {
 	req.Host = strings.TrimSpace(req.Host)
+	// 允许 "[fd00::1]" 这种带方括号的 IPv6 写法（用户从 URL 里复制常见），
+	// 统一存成裸地址，内部按 net.JoinHostPort 拼接。
+	if len(req.Host) >= 2 && strings.HasPrefix(req.Host, "[") && strings.HasSuffix(req.Host, "]") {
+		req.Host = strings.Trim(req.Host, "[]")
+	}
 	if req.Host == "" {
 		req.Host = "127.0.0.1"
+	}
+	if ip := net.ParseIP(stripZone(req.Host)); ip != nil && ip.To4() == nil {
+		// IPv6 走 pinhole（IPv6FirewallControl）而不是 NAT 映射；这里只保证地址
+		// 合法，能力判断交给 mapper。
+		req.Host = stripZoneBrackets(req.Host)
 	}
 	if requirePort && (req.Port < 1 || req.Port > 65535) {
 		return fmt.Errorf("port must be between 1 and 65535")
@@ -689,4 +700,21 @@ func normalizeGatewayPin(v string) string {
 		return ""
 	}
 	return pin
+}
+
+// stripZone removes an IPv6 scope suffix ("fe80::1%eth0" -> "fe80::1").
+func stripZone(host string) string {
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		return host[:i]
+	}
+	return host
+}
+
+// stripZoneBrackets normalises a bracketed IPv6 literal to its bare form.
+func stripZoneBrackets(host string) string {
+	h := strings.TrimSpace(host)
+	if len(h) >= 2 && strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
+		h = h[1 : len(h)-1]
+	}
+	return h
 }

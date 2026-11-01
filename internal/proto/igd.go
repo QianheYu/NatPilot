@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -36,6 +37,9 @@ type IGDClient struct {
 	version     int // 2 for IGD:2, 1 for legacy
 	legacyPPP   bool
 	cachedExt   string
+	// v6 holds the optional WANIPv6FirewallControl:1 endpoint and its cached
+	// firewall status. nil when the device description did not advertise it.
+	v6 *ipv6State
 }
 
 // IGDConfig describes where to reach the device.
@@ -51,6 +55,12 @@ type IGDConfig struct {
 	UDN          string
 	Name         string
 	Timeout      time.Duration
+
+	// IPv6FirewallControlURL/ServiceType describe the optional IGDv2
+	// WANIPv6FirewallControl:1 service found in the device description. Both are
+	// empty on gateways that cannot open IPv6 pinholes.
+	IPv6FirewallControlURL  string
+	IPv6FirewallServiceType string
 }
 
 // NewIGDClient creates a client for a discovered IGD.
@@ -84,6 +94,17 @@ func NewIGDClient(c IGDConfig) *IGDClient {
 	if legacy {
 		caps = append(caps, "wan-ppp")
 	}
+	var v6 *ipv6State
+	if c.IPv6FirewallControlURL != "" {
+		// The service is optional and independent of the WAN connection version:
+		// advertise it so callers can route IPv6 rules to AddPinhole.
+		caps = append(caps, CapIPv6Pinhole)
+		svcType := c.IPv6FirewallServiceType
+		if svcType == "" {
+			svcType = svcWANIPv6FirewallControl1
+		}
+		v6 = &ipv6State{controlURL: c.IPv6FirewallControlURL, serviceType: svcType}
+	}
 	return &IGDClient{
 		info: GatewayInfo{
 			Kind:         c.Kind,
@@ -103,6 +124,7 @@ func NewIGDClient(c IGDConfig) *IGDClient {
 		http:        &http.Client{Timeout: timeout},
 		version:     version,
 		legacyPPP:   legacy,
+		v6:          v6,
 	}
 }
 
@@ -115,25 +137,31 @@ func (c *IGDClient) Close() error {
 	return nil
 }
 
-// soapAction performs a SOAP call and returns the raw body of the response.
+// soapAction performs a SOAP call on the WAN connection service.
 func (c *IGDClient) soapAction(ctx context.Context, action string, args [][2]string) (string, error) {
+	return c.soapActionAt(ctx, c.controlURL, c.serviceType, action, args)
+}
+
+// soapActionAt performs a SOAP call against an explicit control URL and service
+// type, so the IPv6 firewall service can share the same envelope/fault handling.
+func (c *IGDClient) soapActionAt(ctx context.Context, controlURL, serviceType, action string, args [][2]string) (string, error) {
 	var body bytes.Buffer
 	body.WriteString(`<?xml version="1.0" encoding="utf-8"?>` + "\n")
 	body.WriteString(`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">`)
 	body.WriteString(`<s:Body>`)
-	fmt.Fprintf(&body, `<u:%s xmlns:u="%s">`, action, c.serviceType)
+	fmt.Fprintf(&body, `<u:%s xmlns:u="%s">`, action, serviceType)
 	for _, kv := range args {
 		fmt.Fprintf(&body, `<%s>%s</%s>`, kv[0], xmlEscape(kv[1]), kv[0])
 	}
 	fmt.Fprintf(&body, `</u:%s>`, action)
 	body.WriteString(`</s:Body></s:Envelope>`)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.controlURL, bytes.NewReader(body.Bytes()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, controlURL, bytes.NewReader(body.Bytes()))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
-	req.Header.Set("SOAPAction", fmt.Sprintf(`"%s#%s"`, c.serviceType, action))
+	req.Header.Set("SOAPAction", fmt.Sprintf(`"%s#%s"`, serviceType, action))
 	req.Header.Set("User-Agent", "NatPilot/0.1 UPnP/1.1")
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -163,28 +191,63 @@ func xmlEscape(s string) string {
 	return b.String()
 }
 
-// upnpError turns a SOAP fault into an error with an actionable hint for the codes
-// that operators actually hit. The raw code stays first so logs remain greppable.
-func upnpError(action, code, desc string) error {
-	msg := fmt.Sprintf("upnp error %s: %s", code, desc)
-	switch code {
-	case "606": // Action not authorized
-		msg += "；路由器拒绝了该动作，常见原因：" +
-			"① 网关启用了 secure mode / UPnP 访问控制，只允许把端口映射到『发起请求的本机 IP』；" +
-			"② 该内网客户端地址不在网关的授权列表内；" +
-			"③ 请求的端口超出网关允许的范围（很多固件禁用 1024 以下端口）；" +
-			"④ 该网关只接受注册过的客户端。请在路由器 UPnP 设置里放开对本机的授权，" +
-			"并把规则目标改为本机 IP、外部端口换成 1024 以上后重试"
-	case "718": // ConflictInMappingEntry
-		msg += "；该外部端口已被其它映射占用，换一个外部端口或先删除冲突项"
-	case "724": // SamePortValuesRequired
-		msg += "；该网关要求内外网端口一致，请把外部端口留空或设为与内网端口相同"
-	case "725": // OnlyPermanentLeasesSupported
-		msg += "；该网关只支持永久租约，请把租约设为 0（永久）"
-	case "501": // ActionFailed
-		msg += "；网关执行失败，可能是端口被占用或网关临时错误"
+// UPnPError is a SOAP fault returned by a gateway, with the raw error code kept
+// so callers can react to specific conditions (e.g. 704 = pinhole already gone).
+type UPnPError struct {
+	Action      string
+	Code        string
+	Description string
+}
+
+// upnpHints carries the operator-facing explanation appended to the raw fault.
+var upnpHints = map[string]string{
+	// ---- WANIPConnection ----
+	"606": "；路由器拒绝了该动作，常见原因：" +
+		"① 网关启用了 secure mode / UPnP 访问控制，只允许把端口映射到『发起请求的本机 IP』；" +
+		"② 该内网客户端地址不在网关的授权列表内；" +
+		"③ 请求的端口超出网关允许的范围（很多固件禁用 1024 以下端口）；" +
+		"④ 该网关只接受注册过的客户端。请在路由器 UPnP 设置里放开对本机的授权，" +
+		"并把规则目标改为本机 IP、外部端口换成 1024 以上后重试",
+	"718": "；该外部端口已被其它映射占用，换一个外部端口或先删除冲突项",
+	"724": "；该网关要求内外网端口一致，请把外部端口留空或设为与内网端口相同",
+	"725": "；该网关只支持永久租约，请把租约设为 0（永久）",
+	"501": "；网关执行失败，可能是端口被占用或网关临时错误",
+
+	// ---- WANIPv6FirewallControl:1 (pinhole) ----
+	"701": "；网关的 IPv6 pinhole 表已满（PinholeSpaceExhausted），请先删除不再需要的 IPv6 规则/防火墙 pinhole 后重试",
+	"702": "；网关的 IPv6 防火墙已关闭（FirewallDisabled），请在路由器管理界面启用 IPv6 防火墙后重试",
+	"703": "；网关不允许入站 IPv6 pinhole（InboundPinholeNotAllowed），请在路由器 IPv6 防火墙设置中允许入站连接，或手动添加 pinhole 规则",
+	"704": "；该 pinhole 不存在（NoSuchEntry），可能已过期或被网关清除，可忽略或重新创建",
+	"705": "；网关不支持该协议（ProtocolNotSupported），IPv6 pinhole 仅支持 TCP(6) 或 UDP(17)",
+	"706": "；网关不允许内网端口通配（InternalPortWildcardingNotAllowed），请为 pinhole 指定具体的内网端口",
+	"707": "；网关不允许协议通配（ProtocolWildcardingNotAllowed），请明确指定 TCP 或 UDP",
+	"708": "；网关不允许完全通配来源地址（WildcardNotPermittedInSrcIP），请指定来源 IPv6 地址/端口后重试",
+	"709": "；网关没有收到内网侧的探测包（NoPacketSent），请确认目标 IPv6 主机在线、本地防火墙放行，并检查该地址是否属于本网关的 LAN",
+}
+
+// Error renders the fault. The raw code stays first so logs remain greppable.
+func (e *UPnPError) Error() string {
+	msg := fmt.Sprintf("upnp error %s: %s", e.Code, e.Description)
+	if hint, ok := upnpHints[e.Code]; ok {
+		msg += hint
 	}
-	return fmt.Errorf("%s", msg)
+	return msg
+}
+
+// upnpError turns a SOAP fault into an error with an actionable hint for the codes
+// that operators actually hit.
+func upnpError(action, code, desc string) error {
+	return &UPnPError{Action: action, Code: code, Description: desc}
+}
+
+// UPnPErrorCode extracts the numeric UPnP error code from an error returned by
+// this package. It reports false for non-UPnP errors.
+func UPnPErrorCode(err error) (string, bool) {
+	var ue *UPnPError
+	if errors.As(err, &ue) {
+		return ue.Code, true
+	}
+	return "", false
 }
 
 func parseUPnPError(body string) (string, string) {
@@ -678,8 +741,17 @@ func DescribeGateway(ctx context.Context, location string, timeout time.Duration
 		ctrl    string
 	}
 	best := candidate{rank: 99}
+	// The IPv6 firewall service lives next to the WAN connection service in the
+	// same description (usually on the WANDevice node). Capture it even though
+	// SSDP itself is IPv4-only: the pinhole service is what IPv6 needs.
+	v6Ctrl := ""
+	v6Svc := ""
 	for _, s := range svcs {
 		st := s.ServiceType
+		if v6Ctrl == "" && strings.HasPrefix(st, svcWANIPv6FirewallControlPrefix) {
+			v6Ctrl = resolveURL(base, s.ControlURL)
+			v6Svc = st
+		}
 		c := candidate{svcType: st, ctrl: resolveURL(base, s.ControlURL)}
 		switch {
 		case strings.HasPrefix(st, svcWANIPConnection2):
@@ -721,6 +793,9 @@ func DescribeGateway(ctx context.Context, location string, timeout time.Duration
 		UDN:          desc.Device.UDN,
 		Name:         name,
 		Timeout:      timeout,
+
+		IPv6FirewallControlURL:  v6Ctrl,
+		IPv6FirewallServiceType: v6Svc,
 	}, &desc, nil
 }
 

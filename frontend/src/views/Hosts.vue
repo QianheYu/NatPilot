@@ -8,6 +8,7 @@ import PolicyFields from '../components/PolicyFields.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
+import { fmtHost, fmtHostPort } from '../utils/netaddr'
 
 const loading = ref(true)
 const hosts = ref([])
@@ -158,6 +159,14 @@ async function removeHost(h) {
   }
 }
 
+
+// familyBadge renders the optional interface family field. Older payloads do
+// not send it, so an absent (or unexpected) value simply yields no badge.
+function familyBadge(family) {
+  if (family === 'ipv6') return 'IPv6'
+  if (family === 'ipv4') return 'IPv4'
+  return ''
+}
 
 // ---- 扫描主机（指定网段 / 网卡）----
 const hostScanOpen = ref(false)
@@ -494,11 +503,14 @@ onBeforeUnmount(clearPoll)
 
     <div class="grid cols-4" style="margin-bottom: 16px">
       <div v-for="i in interfaces" :key="i.name + i.ip" class="stat">
-        <div class="label">{{ i.name }}</div>
-        <div class="value" style="font-size: 18px">{{ i.ip }}</div>
+        <div class="label">
+          {{ i.name }}
+          <span v-if="familyBadge(i.family)" class="badge" style="margin-left: 4px">{{ familyBadge(i.family) }}</span>
+        </div>
+        <div class="value mono" style="font-size: 18px">{{ fmtHost(i.ip) }}</div>
         <div class="sub mono small">{{ i.network }}</div>
         <div class="sub">
-          <span v-if="i.gateway">网关 {{ i.gateway }}</span>
+          <span v-if="i.gateway">网关 {{ fmtHost(i.gateway) }}</span>
           <span v-else-if="i.loopback" class="mute">回环</span>
         </div>
       </div>
@@ -576,7 +588,7 @@ onBeforeUnmount(clearPoll)
           <select class="select" :value="hostScanForm.iface" @change="pickScanIface($event.target.value)">
             <option value="">默认路由（不绑定网卡）</option>
             <option v-for="i in scanIfaces" :key="i.name + i.ip" :value="i.name">
-              {{ i.name }} · {{ i.ip }}<template v-if="i.gateway"> · 网关 {{ i.gateway }}</template>
+              {{ i.name }} · {{ fmtHost(i.ip) }}<template v-if="familyBadge(i.family)"> · {{ familyBadge(i.family) }}</template><template v-if="i.gateway"> · 网关 {{ fmtHost(i.gateway) }}</template>
             </option>
           </select>
           <div class="hint">选中网卡后，探测报文会绑定该网卡的地址发出，多网卡机器不会走错链路。</div>
@@ -671,7 +683,7 @@ onBeforeUnmount(clearPoll)
             <tbody>
               <tr v-for="p in scanPorts" :key="p.id" :class="{ selected: portSel.has(p.id) }">
                 <td><input type="checkbox" :checked="portSel.has(p.id)" @change="togglePort(p.id)" /></td>
-                <td class="mono small nowrap">{{ p.host }}:{{ p.port }}</td>
+                <td class="mono small nowrap">{{ fmtHostPort(p.host, p.port) }}</td>
                 <td>
                   <Badge :kind="protocolTag(p.protocol).kind">{{ protocolTag(p.protocol).label }}</Badge>
                 </td>

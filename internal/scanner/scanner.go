@@ -787,5 +787,11 @@ func normalizeListenerHost(bind, fallback string) string {
 	if ip.IsLoopback() {
 		return "127.0.0.1"
 	}
-	return lan
+	// 具体的 IPv6 监听地址（全局 / ULA）保留下来，和 IPv4 行为对齐：
+	// 端口列表要如实反映"这个服务在哪个地址上可达"。link-local 没有 zone 无法
+	// 复现，仍折叠到 LAN 地址以免生成不可用的规则。
+	if ip.IsLinkLocalUnicast() {
+		return lan
+	}
+	return ip.String()
 }

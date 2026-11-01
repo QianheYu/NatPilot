@@ -6,6 +6,7 @@ import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { toastOk, toastErr, toastWarn } from '../store'
 import { fmtRelative, fmtTime, gatewayKindInfo, portStatusInfo, scanStatusInfo, statusInfo, truncate } from '../utils/format'
+import { fmtHostPort } from '../utils/netaddr'
 
 const router = useRouter()
 const loading = ref(true)
@@ -166,7 +167,7 @@ onMounted(load)
                   <Badge :kind="gatewayKindInfo(g.kind).kind">{{ gatewayKindInfo(g.kind).label }}</Badge>
                   <div class="small dim">{{ truncate(g.name, 26) }}</div>
                 </td>
-                <td class="mono small">{{ g.address }}:{{ g.port }}</td>
+                <td class="mono small">{{ fmtHostPort(g.address, g.port) }}</td>
                 <td class="mono small">{{ g.external_ip || '—' }}</td>
                 <td class="right">
                   <Badge v-if="g.preferred" kind="accent">首选</Badge>
@@ -197,8 +198,8 @@ onMounted(load)
                     {{ statusInfo(r.mapping_status).label }}
                   </Badge>
                 </td>
-                <td class="mono small">{{ r.host }}:{{ r.port }}</td>
-                <td class="mono small dim">{{ r.external_ip || '' }}{{ r.external_port ? ':' + r.external_port : '' }}</td>
+                <td class="mono small">{{ fmtHostPort(r.host, r.port) }}</td>
+                <td class="mono small dim">{{ r.external_port ? fmtHostPort(r.external_ip, r.external_port) : (r.external_ip || '') }}</td>
                 <td class="small">{{ truncate(r.name, 22) }}</td>
                 <td class="right small mute">{{ fmtRelative(r.updated_at) }}</td>
               </tr>
@@ -223,7 +224,7 @@ onMounted(load)
                 <td>
                   <Badge :kind="portStatusInfo(p.status).kind">{{ portStatusInfo(p.status).label }}</Badge>
                 </td>
-                <td class="mono small">{{ p.host }}:{{ p.port }}</td>
+                <td class="mono small">{{ fmtHostPort(p.host, p.port) }}</td>
                 <td class="small dim">{{ p.service || p.process || '—' }}</td>
                 <td class="right small mute">{{ fmtRelative(p.last_seen) }}</td>
               </tr>

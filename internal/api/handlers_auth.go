@@ -33,11 +33,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Config
 	writeJSON(w, http.StatusOK, map[string]any{
-		"product":         "NatPilot",
-		"version":         s.app.Version,
-		"mode":            cfg.EffectiveMode(),
-		"auth_enabled":    s.app.Auth.Enabled(),
-		"auth_required":   cfg.AuthRequired(),
+		"product":       "NatPilot",
+		"version":       s.app.Version,
+		"mode":          cfg.EffectiveMode(),
+		"auth_enabled":  s.app.Auth.Enabled(),
+		"auth_required": cfg.AuthRequired(),
 		// 桌面/免登录模式只有一个内置管理员，不支持多用户与权限管理。
 		"user_management": cfg.AuthRequired(),
 		"frontend_built":  webui.HasFrontend(),

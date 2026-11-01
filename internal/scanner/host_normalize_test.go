@@ -25,13 +25,15 @@ func TestNormalizeListenerHost(t *testing.T) {
 		{"127.0.0.1", "127.0.0.1"},
 		{"192.168.1.8", "192.168.1.8"},
 		{"10.121.20.206", "10.121.20.206"},
-		// IPv6: loopback folds to the IPv4 loopback, everything else to the LAN
-		// address, because IGD/PCP internal clients are IPv4 addresses.
+		// IPv6: wildcard and loopback behave like IPv4; a concrete global/ULA bind
+		// is kept as-is (v6 parity with the "report the real address" rule) and
+		// only link-local falls back, because a link-local address without its
+		// zone id cannot be used to build a rule.
 		{"[::1]", "127.0.0.1"},
 		{"[fe80::1]", lan},
-		{"[fe80::150:8af9:623c:b011%7]", lan}, // zone id stripped
-		{"240e:810:40:709:7646:b1cb:dc0e:6f35", lan},
-		{"[fdfe:dcba:9876::1]", lan},
+		{"[fe80::150:8af9:623c:b011%7]", lan}, // zone id stripped, link-local -> lan
+		{"240e:810:40:709:7646:b1cb:dc0e:6f35", "240e:810:40:709:7646:b1cb:dc0e:6f35"},
+		{"[fdfe:dcba:9876::1]", "fdfe:dcba:9876::1"},
 		// a v4-mapped IPv6 address is a v4 address
 		{"[::ffff:192.168.1.9]", "192.168.1.9"},
 	}

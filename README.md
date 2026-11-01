@@ -688,6 +688,37 @@ retention:
 清理循环每 5 分钟运行一次；负值会被钳制为 0。旧的 `log.max_entries` /
 `log.retention_days` 仍然兼容（新配置优先）。
 
+## IPv6 支持
+
+IPv4 的能力在 IPv6 上都有对应实现，但**机制不同**——IPv6 没有 NAT，所以"端口映射"变成"防火墙开洞（pinhole）"：
+
+| 能力 | IPv4 实现 | IPv6 实现 |
+| --- | --- | --- |
+| 网卡枚举 | `net.Interfaces()` 取 IPv4 | 同时枚举 v6（全局 / ULA / 链路本地，带 zone） |
+| 主机发现 | 读 ARP 邻居表 | 读 NDP 邻居表（Windows `netsh ipv6 show neighbors` / `ip -6 neigh` / `ndp -an`） |
+| 网段扫描 | CIDR 展开 + TCP 探测 | 同左，128 位展开（受 `max_hosts` 限制，/64 只扫前 N 个） |
+| 映射 | IGD `AddPortMapping` / NAT-PMP / PCP | IGDv2 **`WANIPv6FirewallControl:1`** 的 `AddPinhole` |
+| 本机监听 | `netstat` / `/proc/net/tcp` | 含 `tcp6` / `udp6`，具体 v6 绑定地址如实保留 |
+
+### 使用要点
+
+- **控制台监听 IPv6**：`natpilot --host :: serve`（Linux 上 `::` 为双栈；容器里把 `NATPILOT_HOST` 改成 `::` 即可）。默认 `0.0.0.0` 只覆盖 IPv4。
+- **扫描 IPv6 网段**：主机扫描弹窗里选网卡后把网段写成 v6 CIDR（如 `fd00::/120`）；链路本地扫描需选对应网卡的 zone。
+- **规则填 IPv6**：内网地址可直接写 `fd00::10` 或 `[fd00::10]`，两种写法都会归一化。
+- **映射需要网关支持**：`AddPinhole` 属于 IGDv2 的可选服务，不少家用固件不实现。若网关不支持，NatPilot 会返回明确错误，此时请在路由器上手工放行，或改用 IPv4 映射。
+
+```bash
+# 检查网关是否支持 IPv6 防火墙控制
+natpilot gateway list           # 看协议/能力
+```
+
+### 已知限制
+
+- 链路本地地址（`fe80::/10`）必须带 zone 才能发包；规则里保存时会保留 zone 后缀。
+- IPv6 网段通常极大（/64 = 2^64 地址），扫描按 `max_hosts`（默认 1024，上限 4096）截断，不会真正遍历整个网段。
+- IPv6 的 `AddPinhole` 没有"外部端口"概念，规则里的"外部端口"字段对 v6 无效。
+
+---
 ## 协议支持与降级策略
 
 ```
