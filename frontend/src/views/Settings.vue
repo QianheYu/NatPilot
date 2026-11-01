@@ -49,6 +49,11 @@ function changedKeys() {
   return Object.keys(draft).filter((k) => JSON.stringify(draft[k]) !== JSON.stringify(base[k]))
 }
 
+// 鉴权开关不能因为"当前免登录"就被禁用——否则一旦关了鉴权就再也打不开，
+// 形成死锁。规则改成单向：打开随时可以；关闭是降权操作，要求当前会话已认证。
+const authCurrentlyOn = computed(() => !!(cfg.value.auth && cfg.value.auth.enabled))
+const authToggleDisabled = computed(() => authCurrentlyOn.value && !store.identity.authenticated)
+
 async function clearOverride(key) {
   try {
     const res = await api.patchSettings({ [key]: '' })
@@ -248,13 +253,21 @@ onMounted(load)
       <div class="card">
         <div class="card-head"><h3>安全与登录</h3></div>
         <div class="card-body">
-          <label class="field row" style="gap: 10px">
-            <Switch v-model="draft['auth.enabled']" :disabled="!store.identity.authenticated" />
-        <span v-if="overrides['auth.enabled'] !== undefined" class="small" style="color: var(--warn)">
-          数据库里存在持久化覆盖 auth.enabled={{ overrides['auth.enabled'] }}（会盖过环境变量与新默认值）
-          <button class="btn sm" style="margin-left: 8px" @click="clearOverride('auth.enabled')">清除该覆盖项</button>
-        </span>
-            <span class="small dim">启用登录鉴权（web / 服务端部署建议开启；桌面模式免登录）</span>
+          <label class="field row" style="gap: 10px; flex-wrap: wrap">
+            <Switch v-model="draft['auth.enabled']" :disabled="authToggleDisabled" />
+            <span class="small dim">
+              启用登录鉴权（web / 服务端部署建议开启；桌面模式免登录）
+              <template v-if="authToggleDisabled">· 关闭鉴权属于降权操作，需先以管理员登录</template>
+              <template v-else-if="!authCurrentlyOn">· 当前免登录，可以直接打开</template>
+            </span>
+            <span
+              v-if="overrides['auth.enabled'] !== undefined"
+              class="small"
+              style="color: var(--warn); flex-basis: 100%"
+            >
+              数据库里存在持久化覆盖 auth.enabled={{ overrides['auth.enabled'] }}（优先级高于环境变量与默认值）
+              <button class="btn sm" style="margin-left: 8px" @click="clearOverride('auth.enabled')">清除该覆盖项</button>
+            </span>
           </label>
           <label class="field row" style="gap: 10px">
             <Switch v-model="draft['auth.require_for_web']" />
