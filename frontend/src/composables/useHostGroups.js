@@ -87,6 +87,17 @@ export function hostKeyFor(ip, index) {
   return mac ? `mac:${mac}` : `ip:${addrKey(ip) || '?'}`
 }
 
+// hostRecordKey is the stable per-host identity the views pass through
+// groupBySubnet's optional `hostKeyFor`: MAC when the host has one, else the
+// hosts[].id (so a MAC-less dual-stack device still occupies one node), else ''
+// so the caller falls back to the built-in MAC/IP key.
+export function hostRecordKey(record) {
+  if (!record) return ''
+  const mac = normMAC(record.mac)
+  if (mac) return `mac:${mac}`
+  return record.id != null && record.id !== '' ? `host:${record.id}` : ''
+}
+
 // subnetKey derives the level-1 grouping for one address.
 // IPv4 behaviour is unchanged (127.x → loopback, /24 otherwise); IPv6 is
 // delegated to groupIPv6 so `net6:`-prefixed keys can never collide with the

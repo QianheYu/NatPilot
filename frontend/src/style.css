@@ -614,6 +614,7 @@ table.data th.mono {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 /* ---------- stat cards ---------- */

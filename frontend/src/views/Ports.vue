@@ -15,7 +15,7 @@ import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
   groupBySubnet,
-  normMAC,
+  hostRecordKey,
   readCollapsed,
   readGroupPref,
   rowKey,
@@ -49,12 +49,7 @@ const hostIndex = computed(() => buildHostIndex(hosts.value))
 // 空字符串，分组自动退化回「按地址本身」（原行为）。
 const tree = computed(() =>
   groupBySubnet(ports.value, hostIndex.value, (p) => p.host, (p) => p.port, {
-    hostKeyFor: (item, record) => {
-      if (!record) return ''
-      const mac = normMAC(record.mac)
-      if (mac) return `mac:${mac}`
-      return record.id != null && record.id !== '' ? `host:${record.id}` : ''
-    },
+    hostKeyFor: (item, record) => hostRecordKey(record),
   }),
 )
 const tableRows = computed(() =>

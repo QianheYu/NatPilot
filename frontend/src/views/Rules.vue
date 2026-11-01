@@ -15,6 +15,7 @@ import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
   groupBySubnet,
+  hostRecordKey,
   readCollapsed,
   readGroupPref,
   rowKey,
@@ -41,7 +42,13 @@ const collapsedHosts = ref(readCollapsed('host'))
 const detailRows = ref(new Set())
 
 const hostIndex = computed(() => buildHostIndex(hosts.value))
-const tree = computed(() => groupBySubnet(rules.value, hostIndex.value, (r) => r.host, (r) => r.port))
+// 与端口页一致：解析到主机时用 MAC（无 MAC 用主机 id）作二级键，
+// 双栈设备的 v4 / v6 规则只会占用一个主机节点。
+const tree = computed(() =>
+  groupBySubnet(rules.value, hostIndex.value, (r) => r.host, (r) => r.port, {
+    hostKeyFor: (item, record) => hostRecordKey(record),
+  }),
+)
 const tableRows = computed(() =>
   grouped.value
     ? rowsForTree(tree.value, collapsedSubnets.value, collapsedHosts.value)
