@@ -24,6 +24,7 @@ import (
 	"github.com/ekko-studio/natpilot/internal/config"
 	"github.com/ekko-studio/natpilot/internal/logging"
 	"github.com/ekko-studio/natpilot/internal/model"
+	"github.com/ekko-studio/natpilot/internal/netutil"
 	"github.com/ekko-studio/natpilot/internal/store"
 )
 
@@ -289,14 +290,17 @@ func cmdServe(ctx context.Context, flags map[string]string, args []string) int {
 		return 1
 	}
 	actual := ln.Addr().String()
-	shown := displayAddr(actual)
 	fmt.Printf("%s\n", versionString())
 	fmt.Printf("  mode         : %s\n", mode)
-	fmt.Printf("  listening    : http://%s\n", shown)
-	if shown != actual {
-		// 绑定在 0.0.0.0/[::] 时，listening 行显示的是可点击的本机地址；
-		// 这里补一行真实绑定，避免被误读成"只监听了回环"。
-		fmt.Printf("  bind         : %s (all interfaces)\n", actual)
+	// listening 打印内核实际绑定的地址/端口（0.0.0.0 就是 0.0.0.0），
+	// 不再改写成 127.0.0.1 —— 那样会让"到底监听了哪个地址"看不出来。
+	listenNote := ""
+	if h, _, err := net.SplitHostPort(actual); err == nil && (h == "0.0.0.0" || h == "::") {
+		listenNote = "   (all interfaces)"
+	}
+	fmt.Printf("  listening    : http://%s%s\n", actual, listenNote)
+	for _, line := range reachableURLs(actual) {
+		fmt.Printf("  %-13s: %s\n", line.label, line.url)
 	}
 	fmt.Printf("  data dir     : %s\n", a.Config.App.DataDir)
 	fmt.Printf("  database     : %s\n", a.Config.Database.Path)
@@ -330,14 +334,45 @@ func cmdServe(ctx context.Context, flags map[string]string, args []string) int {
 	}
 }
 
-func displayAddr(addr string) string {
-	if strings.HasPrefix(addr, "0.0.0.0:") {
-		return "127.0.0.1:" + strings.TrimPrefix(addr, "0.0.0.0:")
+// reachableURLs turns the bound address into the URLs a user can actually open.
+//
+// A wildcard bind (0.0.0.0 / [::]) is not clickable but is the important fact to
+// report, so "listening" keeps it verbatim and this helper adds the concrete
+// loopback and LAN addresses underneath.
+func reachableURLs(actual string) []struct{ label, url string } {
+	host, port, err := net.SplitHostPort(actual)
+	if err != nil {
+		return nil
 	}
-	if strings.HasPrefix(addr, "[::]:") {
-		return "127.0.0.1:" + strings.TrimPrefix(addr, "[::]:")
+	var out []struct{ label, url string }
+	wildcard := host == "0.0.0.0" || host == "::" || host == ""
+	local := net.JoinHostPort("127.0.0.1", port)
+	if !isLoopbackLiteral(host) {
+		out = append(out, struct{ label, url string }{"local url", "http://" + local})
 	}
-	return addr
+	if wildcard {
+		ifaces, err := netutil.Interfaces()
+		if err != nil {
+			return out
+		}
+		seen := 0
+		for _, i := range ifaces {
+			if i.Loopback || !i.Up || i.IP == "" {
+				continue
+			}
+			out = append(out, struct{ label, url string }{"lan url", "http://" + net.JoinHostPort(i.IP, port)})
+			seen++
+			if seen >= 4 {
+				break
+			}
+		}
+	}
+	return out
+}
+
+func isLoopbackLiteral(host string) bool {
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // ---- helpers shared by CLI commands ----
