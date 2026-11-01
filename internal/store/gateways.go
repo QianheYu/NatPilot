@@ -264,14 +264,20 @@ func (s *Store) UpsertHost(h *model.Host) error {
 		}
 	}
 	// Report what is actually persisted: setPrimaryIP may have kept the previous
-	// value when another host row still owns the preferred address, and the MAC
-	// may have been preserved from an earlier observation.
-	var storedMAC, primaryIP string
-	if err := tx.QueryRow(`SELECT mac, ip FROM hosts WHERE id=?`, id).Scan(&storedMAC, &primaryIP); err != nil {
+	// value when another host row still owns the preferred address, and the MAC,
+	// hostname, note and tags may have been preserved from an earlier (or
+	// user-corrected) observation.
+	var storedMAC, primaryIP, storedHostname, storedNote string
+	var storedTags model.StringList
+	if err := tx.QueryRow(`SELECT mac, ip, hostname, note, tags FROM hosts WHERE id=?`, id).
+		Scan(&storedMAC, &primaryIP, &storedHostname, &storedNote, &storedTags); err != nil {
 		return err
 	}
 	h.MAC = storedMAC
 	h.IP = primaryIP
+	h.Hostname = storedHostname
+	h.Note = storedNote
+	h.Tags = storedTags
 	h.Addresses = addrs
 	annotatePrimaryAddress(h)
 	return tx.Commit()

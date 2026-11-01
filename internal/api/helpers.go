@@ -59,6 +59,9 @@ func portStatusFilterFor(r model.Rule) store.PortStatusFilter {
 		Limit: 5,
 	}
 	if r.HostID > 0 {
+		// Filter by identity, not by the address literal: the observation row
+		// may currently hold the other family's address for the same host.
+		f.Host = ""
 		f.HostID = r.HostID
 	}
 	return f

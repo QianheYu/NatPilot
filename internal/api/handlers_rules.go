@@ -238,7 +238,14 @@ func orDef(v, def string) string {
 
 // linkPortToRule marks a discovered port as managed by a rule.
 func (s *Server) linkPortToRule(rule *model.Rule) {
-	ports, _, err := s.app.Store.ListPorts(store.PortStatusFilter{Host: rule.Host, Query: strconv.Itoa(rule.Port), Limit: 5})
+	f := store.PortStatusFilter{Host: rule.Host, Query: strconv.Itoa(rule.Port), Limit: 5}
+	if rule.HostID > 0 {
+		// Resolve by host identity so a port discovered over the other address
+		// family (the same device) is linked instead of duplicated.
+		f.Host = ""
+		f.HostID = rule.HostID
+	}
+	ports, _, err := s.app.Store.ListPorts(f)
 	if err != nil {
 		return
 	}
@@ -484,7 +491,11 @@ func (s *Server) unlinkStalePortsForRule(rule *model.Rule) {
 		if p.RuleID != rule.ID {
 			continue
 		}
-		if p.Host == rule.Host && p.Port == rule.Port && strings.EqualFold(p.Protocol, rule.Protocol) {
+		sameHost := p.Host == rule.Host
+		if rule.HostID > 0 && p.HostID == rule.HostID {
+			sameHost = true
+		}
+		if sameHost && p.Port == rule.Port && strings.EqualFold(p.Protocol, rule.Protocol) {
 			continue
 		}
 		_ = s.app.Store.MarkPortRemoved(p.ID)
