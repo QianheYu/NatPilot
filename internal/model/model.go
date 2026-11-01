@@ -246,22 +246,28 @@ type Gateway struct {
 }
 
 // Host is a discovered network peer.
+//
+// IP is the primary address (see Host.AddressOf) and is kept for backward
+// compatibility with clients that only know one address; Addresses lists every
+// address observed for the device (IPv4 and IPv6), so a dual-stack host does not
+// lose one family when the other is refreshed.
 type Host struct {
-	ID        int64      `json:"id"`
-	IP        string     `json:"ip"`
-	MAC       string     `json:"mac,omitempty"`
-	Hostname  string     `json:"hostname,omitempty"`
-	Vendor    string     `json:"vendor,omitempty"`
-	Kind      string     `json:"kind,omitempty"`
-	Interface string     `json:"interface,omitempty"`
-	IsLocal   bool       `json:"is_local"`
-	SeenCount int        `json:"seen_count"`
-	OpenPorts StringList `json:"open_ports,omitempty"`
-	Tags      StringList `json:"tags"`
-	Note      string     `json:"note,omitempty"`
-	FirstSeen Time       `json:"first_seen"`
-	LastSeen  Time       `json:"last_seen"`
-	Source    string     `json:"source,omitempty"`
+	ID        int64         `json:"id"`
+	IP        string        `json:"ip"`
+	Addresses []HostAddress `json:"addresses,omitempty"`
+	MAC       string        `json:"mac,omitempty"`
+	Hostname  string        `json:"hostname,omitempty"`
+	Vendor    string        `json:"vendor,omitempty"`
+	Kind      string        `json:"kind,omitempty"`
+	Interface string        `json:"interface,omitempty"`
+	IsLocal   bool          `json:"is_local"`
+	SeenCount int           `json:"seen_count"`
+	OpenPorts StringList    `json:"open_ports,omitempty"`
+	Tags      StringList    `json:"tags"`
+	Note      string        `json:"note,omitempty"`
+	FirstSeen Time          `json:"first_seen"`
+	LastSeen  Time          `json:"last_seen"`
+	Source    string        `json:"source,omitempty"`
 }
 
 // User account for web/GUI deployments.

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/ekko-studio/natpilot/internal/model"
 	"github.com/ekko-studio/natpilot/internal/netutil"
 	"github.com/ekko-studio/natpilot/internal/scanner"
+	"github.com/ekko-studio/natpilot/internal/store"
 )
 
 // parsePorts expands a port spec.
@@ -97,9 +99,13 @@ func (s *Server) buildScanRequest(req scanRequest, trigger string) (scanner.Requ
 				"没有主机匹配 MAC 范围 %q，请先执行一次“发现局域网主机”以刷新 MAC/IP 对应关系", req.TargetRef)
 		}
 	} else if kind == model.ScanTargetHosts {
-		if _, herr := scanner.ParseHostList(req.TargetRef, 512); herr != nil {
+		ips, herr := scanner.ParseHostList(req.TargetRef, 512)
+		if herr != nil {
 			return scanner.Request{}, herr
 		}
+		// 主机清单里选中的是"主机"，这里把它补成可探测的地址：链路本地 IPv6
+		// 必须带 zone（从该主机已记录的地址里取），否则 socket 无法发包。
+		req.TargetRef = strings.Join(enrichHostZones(s.app.Store, ips), ",")
 	} else if kind != model.ScanTargetLocal && strings.TrimSpace(req.TargetRef) == "" {
 		return scanner.Request{}, fmt.Errorf("target_ref (CIDR) is required for network scans")
 	}
@@ -584,4 +590,49 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// enrichHostZones appends the interface zone to link-local IPv6 addresses that came
+// from the host list without one. A host row stores the zone with each address, so
+// "scan this host" keeps working for fe80::/10 targets on multi-NIC machines.
+func enrichHostZones(st *store.Store, ips []string) []string {
+	need := map[string]bool{}
+	for _, ip := range ips {
+		if i := strings.IndexByte(ip, '%'); i < 0 && net.ParseIP(ip) != nil && strings.Contains(ip, ":") {
+			if parsed := net.ParseIP(ip); parsed != nil && parsed.IsLinkLocalUnicast() {
+				need[ip] = true
+			}
+		}
+	}
+	if len(need) == 0 || st == nil {
+		return ips
+	}
+	hosts, err := st.ListHosts(2000)
+	if err != nil {
+		return ips
+	}
+	zoneOf := map[string]string{}
+	for _, h := range hosts {
+		for _, a := range h.Addresses {
+			if a.Zone != "" {
+				zoneOf[a.IP] = a.Zone
+			}
+		}
+		if h.IP != "" && h.Interface != "" {
+			if _, ok := zoneOf[h.IP]; !ok {
+				zoneOf[h.IP] = h.Interface
+			}
+		}
+	}
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if need[ip] {
+			if z := zoneOf[ip]; z != "" {
+				out = append(out, ip+"%"+z)
+				continue
+			}
+		}
+		out = append(out, ip)
+	}
+	return out
 }

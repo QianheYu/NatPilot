@@ -142,6 +142,28 @@ export function fmtHostPort(host, port) {
   return `${h ? fmtHost(h) : ''}:${p}`
 }
 
+// addressLabel renders one host-address record for compact display. It accepts
+// either a bare address string or the `addresses[]` entry the hosts API sends
+// (`{ ip, family, zone, ... }`). Link-local IPv6 keeps its zone suffix so the
+// same fe80:: literal from two NICs stays distinguishable:
+//
+//   '192.168.1.20'                          → '192.168.1.20'
+//   { ip: 'fd00::20' }                      → '[fd00::20]'
+//   { ip: 'fe80::1', zone: 'eth0' }         → '[fe80::1]%eth0'
+//   { ip: 'fe80::1%eth0', zone: 'eth9' }    → '[fe80::1%eth0]' (zone not doubled)
+export function addressLabel(addr) {
+  if (addr == null) return '—'
+  if (typeof addr === 'string') return fmtHost(addr)
+  const ip = String(addr.ip == null ? '' : addr.ip).trim()
+  if (!ip) return '—'
+  const base = fmtHost(ip)
+  const zone = String(addr.zone == null ? '' : addr.zone).trim()
+  // Only IPv6 has zones, and an address that already carries one must not get
+  // a second `%zone` appended.
+  if (!zone || addrFamily(ip) !== 'ipv6' || ip.indexOf('%') >= 0) return base
+  return `${base}%${zone}`
+}
+
 // groupIPv6 derives the tree node for one IPv6 address:
 //   ::1        → 本机回环 (::1)       rank 0
 //   fc00::/7   → /64 bucket           rank 1 (ULA)

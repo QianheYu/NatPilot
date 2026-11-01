@@ -485,8 +485,21 @@ func ParseHostList(spec string, max int) ([]string, error) {
 		if ip == "" {
 			continue
 		}
-		if net.ParseIP(ip) == nil {
+		// 允许 "[fd00::1]" 与链路本地 "fe80::1%以太网"：前者是 URL 里常见的写法，
+		// 后者是 IPv6 link-local 探测必需的 scope（保留 %zone 供 socket 使用）。
+		ip = strings.TrimPrefix(strings.TrimSuffix(ip, "]"), "[")
+		bare := ip
+		zone := ""
+		if i := strings.IndexByte(ip, '%'); i > 0 {
+			bare, zone = ip[:i], ip[i+1:]
+		}
+		if net.ParseIP(bare) == nil {
 			return nil, fmt.Errorf("不是有效的 IP 地址: %q", ip)
+		}
+		if zone != "" {
+			ip = bare + "%" + zone
+		} else {
+			ip = bare
 		}
 		if seen[ip] {
 			continue

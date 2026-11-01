@@ -11,8 +11,13 @@
 // 以 MAC 为身份，端口↔策略绑定也走 MAC。所以能从 /api/hosts 解析出该 IP 当前所属
 // 主机的 MAC 时就用 mac:<mac> 作键 —— 设备换地址后仍留在同一台主机下，标题里的
 // 「当前 IP」跟着更新；解析不到则退化为 ip:<ip>，否则这些行会从界面上消失。
+//
+// 双栈（同一设备既有 IPv4 又有 IPv6）：主机记录现在带 addresses[]，索引把每条
+// 地址都映射到同一条记录，一级网段按该记录的「主地址」（hosts[].ip，v4 优先）算，
+// 于是同一台设备的 v4 / v6 行落在同一个网段节点、同一个主机节点下，而不是被拆成
+// 两段。没有 hosts 数据时自然退化回「按地址本身分组」。
 
-import { groupIPv6, isIPv6 } from '../utils/netaddr'
+import { fmtHost, groupIPv6, isIPv6 } from '../utils/netaddr'
 
 const GROUP_PREF_KEY = 'natpilot-group-by-host'
 const COLLAPSED_PREFIX = 'natpilot-collapsed-'
@@ -24,20 +29,62 @@ export function normMAC(mac) {
   return hex.length === 12 ? hex : ''
 }
 
-// buildHostIndex maps an address to the host record that currently owns it.
+// addrKey normalises one address for map lookups: brackets are display sugar,
+// so `[fd00::20]` and `fd00::20` must resolve to the same host record.
+function addrKey(value) {
+  const s = String(value == null ? '' : value).trim()
+  if (s.length > 1 && s[0] === '[' && s[s.length - 1] === ']') return s.slice(1, -1).trim()
+  return s
+}
+
+// hostAddresses flattens one host record into its addresses, primary first.
+// `addresses` is optional: older payloads only carry the single `ip`.
+export function hostAddresses(host) {
+  const out = []
+  const seen = new Set()
+  const push = (value) => {
+    const ip = addrKey(value && typeof value === 'object' ? value.ip : value)
+    if (!ip || seen.has(ip)) return
+    seen.add(ip)
+    out.push(ip)
+  }
+  if (!host) return out
+  push(host.ip)
+  for (const a of host.addresses || []) push(a)
+  return out
+}
+
+// lookupHost resolves one address to its host record, tolerating brackets.
+export function lookupHost(index, ip) {
+  if (!index) return null
+  return index.get(addrKey(ip)) || null
+}
+
+// buildHostIndex maps every address of a host (primary + all `addresses[]`) to
+// that host record, so a dual-stack device resolves from either family. Both
+// the raw and the bracket-free spelling are registered, because callers hand us
+// addresses straight from API payloads without normalising them first.
 export function buildHostIndex(hosts) {
   const index = new Map()
   for (const h of hosts || []) {
-    if (h && h.ip) index.set(h.ip, h)
+    if (!h) continue
+    const raw = [h.ip]
+    for (const a of h.addresses || []) raw.push(a && typeof a === 'object' ? a.ip : a)
+    for (const value of raw) {
+      const ip = String(value == null ? '' : value).trim()
+      if (!ip) continue
+      index.set(ip, h)
+      index.set(addrKey(ip), h)
+    }
   }
   return index
 }
 
 // hostKeyFor returns the level-2 key for one row.
 export function hostKeyFor(ip, index) {
-  const host = index && index.get(String(ip || ''))
+  const host = lookupHost(index, ip)
   const mac = host ? normMAC(host.mac) : ''
-  return mac ? `mac:${mac}` : `ip:${ip || '?'}`
+  return mac ? `mac:${mac}` : `ip:${addrKey(ip) || '?'}`
 }
 
 // subnetKey derives the level-1 grouping for one address.
@@ -61,25 +108,54 @@ export function subnetOf(ip) {
 }
 
 // groupBySubnet builds the two-level tree from a flat row list.
-export function groupBySubnet(items, index, getIP, getPort) {
+//
+// options.hostKeyFor(item, record) is optional: a view that already knows how
+// to identify a host (e.g. by its own host-keyed cache) can pass it and the
+// returned non-empty string becomes the level-2 key. The built-in MAC/IP key is
+// used whenever it returns nothing, so existing callers are unaffected. Even
+// when a caller key is supplied a row is never split across two host nodes:
+// the first subnet assigned to that key wins for every later row.
+export function groupBySubnet(items, index, getIP, getPort, options = {}) {
+  const callerKey = typeof options.hostKeyFor === 'function' ? options.hostKeyFor : null
   const nets = new Map()
+  const keyNet = new Map() // caller host key -> subnet key already used for it
+
   for (const item of items || []) {
     const ip = getIP(item)
-    const subnet = subnetOf(ip)
-    const hostKey = hostKeyFor(ip, index)
+    const record = lookupHost(index, ip)
 
-    let net = nets.get(subnet.key)
+    // A resolved host is grouped by its primary address (hosts[].ip, v4 first):
+    // that is what keeps a dual-stack device's v4 and v6 rows in one subnet
+    // node instead of two. Unresolved rows keep grouping by their own address.
+    const groupAddr = record && record.ip ? record.ip : ip
+    const subnet = subnetOf(groupAddr)
+
+    let hostKey = ''
+    if (callerKey) hostKey = String(callerKey(item, record) || '').trim()
+    if (!hostKey) hostKey = hostKeyFor(ip, index)
+
+    let netKey = subnet.key
+    if (hostKey) {
+      const prior = keyNet.get(hostKey)
+      if (prior) netKey = prior
+      else keyNet.set(hostKey, netKey)
+    }
+
+    let net = nets.get(netKey)
     if (!net) {
-      net = { key: subnet.key, label: subnet.label, rank: subnet.rank, hosts: new Map(), count: 0 }
-      nets.set(subnet.key, net)
+      net = { key: netKey, label: subnet.label, rank: subnet.rank, hosts: new Map(), count: 0 }
+      nets.set(netKey, net)
     }
     let host = net.hosts.get(hostKey)
     if (!host) {
-      const record = index && index.get(String(ip || ''))
       host = {
         key: hostKey,
-        ip: ip || '?',
-        ips: new Set(),
+        // Primary address first: this is what the node title falls back to.
+        ip: addrKey((record && record.ip) || ip) || '?',
+        primary: addrKey((record && record.ip) || ip),
+        // Seed with every address the host record knows about, so a v4-only
+        // row list still advertises the device's IPv6 address.
+        ips: new Set(record ? hostAddresses(record) : []),
         mac: record ? record.mac || '' : '',
         hostname: record ? record.hostname || '' : '',
         vendor: record ? record.vendor || '' : '',
@@ -87,7 +163,8 @@ export function groupBySubnet(items, index, getIP, getPort) {
       }
       net.hosts.set(hostKey, host)
     }
-    host.ips.add(ip || '?')
+    const rowIP = addrKey(ip)
+    if (rowIP) host.ips.add(rowIP)
     host.items.push(item)
     net.count++
   }
@@ -100,9 +177,18 @@ export function groupBySubnet(items, index, getIP, getPort) {
         const pb = Number(getPort(b)) || 0
         return pa !== pb ? pa - pb : String(getIP(a)).localeCompare(String(getIP(b)))
       })
-      h.ipList = [...h.ips].sort()
-      h.title = h.hostname || h.vendor || h.mac || h.ipList[0]
-      h.subtitle = h.mac && h.ipList.length ? h.ipList.join(', ') : ''
+      // Primary address first, then the rest in numeric order. The label is
+      // rendered compactly as `192.168.1.20 · [fd00::20]`.
+      const all = [...h.ips].filter(Boolean)
+      all.sort((a, b) => {
+        if (a === h.primary) return -1
+        if (b === h.primary) return 1
+        return String(a).localeCompare(String(b), undefined, { numeric: true })
+      })
+      h.ipList = all
+      h.addrText = all.map((ip) => fmtHost(ip)).join(' · ')
+      h.title = h.hostname || h.vendor || h.mac || h.ipList[0] || '?'
+      h.subtitle = h.addrText
     }
     // Bigger hosts first, then by title.
     hosts.sort((a, b) => {

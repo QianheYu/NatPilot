@@ -8,7 +8,7 @@ import PolicyFields from '../components/PolicyFields.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
-import { addrFamily, fmtHost, fmtHostPort } from '../utils/netaddr'
+import { addressLabel, addrFamily, fmtHost, fmtHostPort } from '../utils/netaddr'
 
 const loading = ref(true)
 const hosts = ref([])
@@ -44,9 +44,29 @@ function emptyPolicyForm() {
 }
 const form = reactive(emptyPolicyForm())
 
+// ---- 搜索：地址（任意一条）/ 主机名 / MAC / 厂商 / 接口 ----
+// 双栈主机有多条地址，只要任意一条命中就该出现在结果里。
+const filterQ = ref('')
+
+function hostMatches(h, q) {
+  const fields = [h.hostname, h.mac, h.vendor, h.interface, h.kind, h.note, h.ip]
+  for (const a of hostAddresses(h)) {
+    fields.push(a.ip, a.zone, a.source)
+  }
+  return fields.some((v) => v && String(v).toLowerCase().includes(q))
+}
+
+const filteredHosts = computed(() => {
+  const q = filterQ.value.trim().toLowerCase()
+  if (!q) return hosts.value
+  return hosts.value.filter((h) => hostMatches(h, q))
+})
+
 // ---- 选择的「主机」与「扫描结果端口」----
 const selected = ref(new Set())
-const allSelected = computed(() => hosts.value.length > 0 && selected.value.size === hosts.value.length)
+const allSelected = computed(
+  () => filteredHosts.value.length > 0 && filteredHosts.value.every((h) => selected.value.has(h.id)),
+)
 
 function toggleSelect(id) {
   const next = new Set(selected.value)
@@ -56,7 +76,13 @@ function toggleSelect(id) {
 }
 
 function toggleSelectAll() {
-  selected.value = allSelected.value ? new Set() : new Set(hosts.value.map((h) => h.id))
+  const next = new Set(selected.value)
+  const on = !allSelected.value
+  for (const h of filteredHosts.value) {
+    if (on) next.add(h.id)
+    else next.delete(h.id)
+  }
+  selected.value = next
 }
 
 const selectedHosts = computed(() => hosts.value.filter((h) => selected.value.has(h.id)))
@@ -172,6 +198,106 @@ function familyBadge(family) {
 function ifaceFamily(i) {
   if (!i) return ''
   return familyBadge(i.family) || familyBadge(addrFamily(i.ip))
+}
+
+// ---- 地址列：一台主机可能同时有 IPv4 / IPv6 多个地址 ----
+// addrKey 去掉方括号：`[fd00::20]` 与 `fd00::20` 要落到同一条主机记录。
+function addrKey(value) {
+  return String(value == null ? '' : value).trim().replace(/^\[/, '').replace(/\]$/, '')
+}
+
+// hostAddresses 把一条主机记录摊平成地址数组。老版本载荷没有 addresses，
+// 就退化成一如既往的单条 host.ip，所以下面的渲染逻辑不必分叉。
+function hostAddresses(h) {
+  const out = []
+  const seen = new Set()
+  const push = (value) => {
+    if (!value) return
+    const entry = typeof value === 'string' ? { ip: value } : value
+    const ip = String(entry.ip == null ? '' : entry.ip).trim()
+    if (!ip || seen.has(ip)) return
+    seen.add(ip)
+    out.push({ ...entry, ip })
+  }
+  for (const a of Array.isArray(h && h.addresses) ? h.addresses : []) push(a)
+  if (!out.length && h && h.ip) push({ ip: h.ip, primary: true })
+  return out
+}
+
+// addrFam 优先用后端给的 family，缺省时按地址字面量反推。
+function addrFam(a) {
+  const fam = String((a && a.family) || '').toLowerCase()
+  if (fam === 'ipv6' || fam === 'ipv4') return fam
+  return addrFamily(a && a.ip)
+}
+
+function famLabel(a) {
+  const fam = addrFam(a)
+  if (fam === 'ipv6') return 'IPv6'
+  if (fam === 'ipv4') return 'IPv4'
+  return ''
+}
+
+// 主地址 = 后端标记 primary 的那条；没有任何标记时退回 hosts[].ip。
+function isPrimaryAddr(h, a) {
+  if (!a) return false
+  if (a.primary === true) return true
+  const list = Array.isArray(h && h.addresses) ? h.addresses : []
+  if (list.some((x) => x && x.primary === true)) return false
+  return String(a.ip) === String((h && h.ip) || '')
+}
+
+// 链路本地地址的 zone 后缀：地址本身已带 %zone 时不再重复拼接。
+function addrZone(a) {
+  const zone = String((a && a.zone) || '').trim()
+  if (!zone) return ''
+  return String((a && a.ip) || '').indexOf('%') >= 0 ? '' : zone
+}
+
+function addrTitle(a) {
+  const parts = [famLabel(a), addressLabel(a)]
+  if (a && a.source) parts.push(`来源 ${a.source}`)
+  if (a && a.last_seen) parts.push(`最近 ${fmtRelative(a.last_seen)}`)
+  if (a && a.primary) parts.push('主地址')
+  return parts.filter(Boolean).join(' · ')
+}
+
+// hostFamilyLabel 是行内「按主机扫描」的家庭指示器：v4 / v6 / v4·v6。
+// 只读当前已加载的主机记录，不额外发请求。
+function hostFamilyLabel(h) {
+  const fams = new Set(hostAddresses(h).map((a) => addrFam(a)))
+  const v4 = fams.has('ipv4')
+  const v6 = fams.has('ipv6')
+  if (v4 && v6) return 'v4·v6'
+  return v6 ? 'v6' : v4 ? 'v4' : ''
+}
+
+function hostFamilyTitle(h) {
+  const list = hostAddresses(h).map((a) => addressLabel(a))
+  if (list.length > 1) {
+    return `双栈主机，共 ${list.length} 个地址（${list.join('、')}）：扫描会覆盖全部地址`
+  }
+  return `该主机地址：${list.join('、') || '未知'}`
+}
+
+// 扫描目标一律用主地址：后端会据此解析出该主机的全部地址，请求形状不变。
+function primaryAddress(h) {
+  const list = hostAddresses(h)
+  const primary = list.find((a) => isPrimaryAddr(h, a)) || list[0]
+  return primary ? String(primary.ip) : ''
+}
+
+// targetLabel 在扫描弹窗里展示「实际要扫的主机」，顺带列出它的其它地址。
+function targetLabel(h) {
+  const addrs = hostAddresses(h)
+  const primary = primaryAddress(h)
+  const others = addrs.filter((a) => String(a.ip) !== primary).map((a) => addressLabel(a))
+  const head = fmtHost(primary)
+  return others.length ? `${head}（另有 ${others.join('、')}）` : head
+}
+
+function addrSummary(h) {
+  return hostAddresses(h).map((a) => addressLabel(a)).join(' · ')
 }
 
 // ---- 扫描主机（指定网段 / 网卡）----
@@ -353,7 +479,9 @@ async function startScan() {
     const res = await api.startScan({
       name: `扫描所选主机（${scanTargets.value.length} 台）`,
       target_kind: 'hosts',
-      target_ref: scanTargets.value.map((h) => h.ip).join(','),
+      // 双栈主机只送主地址（v4 优先）；后端据此解析该主机的全部地址，
+      // 请求形状与之前完全一致。
+      target_ref: scanTargets.value.map(primaryAddress).filter(Boolean).join(','),
       ports_spec: scanForm.ports_spec,
       apply_policy: false, // 结果交给用户挑选，不自动建规则
     })
@@ -462,11 +590,16 @@ function openPolicyDialog() {
     if (!byHost.has(p.host)) byHost.set(p.host, [])
     byHost.get(p.host).push(p.port)
   }
-  const hostByIP = new Map(hosts.value.map((h) => [h.ip, h]))
+  // 扫描结果的 p.host 可能来自该主机的任意一条地址（v4 或 v6），
+  // 所以按「全部地址」建索引，不能只认 hosts[].ip。
+  const hostByIP = new Map()
+  for (const h of hosts.value) {
+    for (const a of hostAddresses(h)) hostByIP.set(addrKey(a.ip), h)
+  }
   const targets = []
   let missingMac = 0
   for (const [ip, portList] of byHost) {
-    const host = hostByIP.get(ip) || { id: 0, ip, mac: '', hostname: '' }
+    const host = hostByIP.get(addrKey(ip)) || { id: 0, ip, mac: '', hostname: '' }
     if (!host.mac) missingMac++
     targets.push({ host, ports: [...new Set(portList)].sort((a, b) => a - b) })
   }
@@ -579,8 +712,15 @@ onBeforeUnmount(clearPoll)
 <template>
   <div>
     <div class="toolbar">
+      <input
+        v-model="filterQ"
+        class="input grow"
+        style="max-width: 240px"
+        placeholder="搜索地址 / 主机名 / MAC / 厂商"
+      />
       <span class="dim small">
-        共 {{ hosts.length }} 台主机 · 默认网关 {{ gateway || '未知' }} · 监控按 MAC 绑定，IP 变动自动跟随
+        共 {{ hosts.length }} 台主机<template v-if="filterQ.trim()">（匹配 {{ filteredHosts.length }} 台）</template>
+        · 默认网关 {{ gateway || '未知' }} · 监控按 MAC 绑定，IP 变动自动跟随
       </span>
       <div class="spacer" style="flex: 1" />
       <span v-if="selected.size" class="badge accent">已选 {{ selected.size }} 台</span>
@@ -624,7 +764,7 @@ onBeforeUnmount(clearPoll)
                 <th style="width: 34px">
                   <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" />
                 </th>
-                <th>IP</th>
+                <th>地址</th>
                 <th>MAC</th>
                 <th>厂商</th>
                 <th>主机名</th>
@@ -636,9 +776,23 @@ onBeforeUnmount(clearPoll)
               </tr>
             </thead>
             <tbody>
-              <tr v-for="h in hosts" :key="h.id" :class="{ selected: selected.has(h.id) }">
+              <tr v-for="h in filteredHosts" :key="h.id" :class="{ selected: selected.has(h.id) }">
                 <td><input type="checkbox" :checked="selected.has(h.id)" @change="toggleSelect(h.id)" /></td>
-                <td class="mono small">{{ h.ip }}</td>
+                <td data-label="地址">
+                  <div class="addr-cell">
+                    <span
+                      v-for="a in hostAddresses(h)"
+                      :key="a.ip + '|' + (a.zone || '')"
+                      class="addr-chip"
+                      :class="{ primary: isPrimaryAddr(h, a), v6: addrFam(a) === 'ipv6' }"
+                      :title="addrTitle(a)"
+                    >
+                      <span class="addr-fam">{{ famLabel(a) }}</span>
+                      <span class="addr-ip">{{ fmtHost(a.ip) }}<span v-if="addrZone(a)" class="addr-zone">%{{ addrZone(a) }}</span></span>
+                      <span v-if="isPrimaryAddr(h, a)" class="addr-main">主</span>
+                    </span>
+                  </div>
+                </td>
                 <td class="mono small mute">{{ h.mac || '—' }}</td>
                 <td class="small">{{ h.vendor || '—' }}</td>
                 <td class="small">{{ h.hostname || '—' }}</td>
@@ -652,6 +806,7 @@ onBeforeUnmount(clearPoll)
                 <td class="small mute nowrap">{{ fmtRelative(h.last_seen) }}</td>
                 <td class="right">
                   <div class="cell-actions">
+                    <span v-if="hostFamilyLabel(h)" class="badge fam" :title="hostFamilyTitle(h)">{{ hostFamilyLabel(h) }}</span>
                     <button
                       class="btn sm ghost"
                       :disabled="!canWrite() || !h.mac"
@@ -663,7 +818,7 @@ onBeforeUnmount(clearPoll)
                     <button
                       class="btn sm ghost"
                       :disabled="!canWrite() || scanning"
-                      :title="`扫描 ${h.ip} 的开放端口`"
+                      :title="`扫描 ${targetLabel(h)} 的开放端口`"
                       @click="openScanFor(h)"
                     >
                       扫描端口
@@ -671,6 +826,9 @@ onBeforeUnmount(clearPoll)
                     <button class="btn sm ghost danger" :disabled="!canWrite()" @click="removeHost(h)">移除</button>
                   </div>
                 </td>
+              </tr>
+              <tr v-if="filterQ.trim() && !filteredHosts.length">
+                <td colspan="10" class="dim small">没有匹配“{{ filterQ.trim() }}”的主机（地址、主机名、MAC、厂商均可搜索）。</td>
               </tr>
             </tbody>
           </table>
@@ -737,7 +895,7 @@ onBeforeUnmount(clearPoll)
           </thead>
           <tbody>
             <tr v-for="h in hostScanResult.hosts" :key="h.ip">
-              <td class="mono small">{{ h.ip }}</td>
+              <td class="mono small">{{ fmtHost(h.ip) }}</td>
               <td class="mono small">{{ h.mac || '—' }}</td>
               <td class="small">{{ h.hostname || '—' }}</td>
               <td class="small mute">{{ ifaceName(h.iface || hostScanResult.iface) || '—' }}</td>
@@ -765,7 +923,8 @@ onBeforeUnmount(clearPoll)
     <Modal v-if="scanOpen" title="扫描所选主机" wide @close="closeScan">
       <div class="small dim" style="margin-bottom: 12px">
         目标（{{ scanTargets.length }} 台）：
-        <span class="mono">{{ scanTargets.map((h) => h.ip).join(', ') }}</span>
+        <span class="mono">{{ scanTargets.map(targetLabel).join(' · ') }}</span>
+        <div style="margin-top: 4px">双栈主机按主地址提交，后端会解析出该主机的全部地址后再扫描。</div>
       </div>
 
       <div class="row wrap" style="gap: 10px; align-items: flex-end">
@@ -850,8 +1009,8 @@ onBeforeUnmount(clearPoll)
     <!-- 单机监控策略 -->
     <Modal v-if="monitorHost" title="添加监控" @close="closeMonitor">
       <div class="small dim" style="margin-bottom: 12px">
-        按 MAC <span class="mono">{{ monitorHost.mac }}</span> 绑定，当前 IP
-        <span class="mono">{{ monitorHost.ip }}</span>。IP 变化后策略会自动跟随，无需重设。
+        按 MAC <span class="mono">{{ monitorHost.mac }}</span> 绑定，当前地址
+        <span class="mono">{{ addrSummary(monitorHost) }}</span>。IP 变化后策略会自动跟随，无需重设。
       </div>
 
       <label v-if="policyTargets.length > 1" class="field row" style="gap: 10px; margin-bottom: 6px">

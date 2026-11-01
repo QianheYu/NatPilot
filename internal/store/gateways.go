@@ -158,78 +158,117 @@ func scanHost(sc interface{ Scan(...any) error }) (*model.Host, error) {
 // Identity is the MAC address when the observation carries one: a DHCP lease
 // change means the same device shows up at a new IP, and matching on IP alone
 // would create a second row (losing the "this is the host I monitor" link) and
-// leave a stale entry behind. The lookup falls back to the IP for observations
-// without a MAC (loopback interfaces, some virtual adapters).
+// leave a stale entry behind. When the MAC is unknown the lookup falls back to
+// any address already recorded for the host (host_addresses first, then the
+// legacy hosts.ip column), so observations without a MAC (loopback interfaces,
+// some virtual adapters) still merge.
+//
+// Every address carried by the observation (h.Addresses plus the legacy h.IP)
+// is upserted into host_addresses; hosts.ip is then recomputed as the primary
+// address using the rule documented on pickPrimary. A device discovered over
+// both ARP and NDP therefore keeps both an IPv4 and an IPv6 address instead of
+// losing whichever family was written last.
 func (s *Store) UpsertHost(h *model.Host) error {
+	if h == nil {
+		return nil
+	}
 	now := model.Time{}
 	_ = now.Scan(Now())
 	mac := normalizeMAC(h.MAC)
-
-	var id int64
-	var seen int
-	var err error
-	if mac != "" {
-		err = s.db.QueryRow(`SELECT id, seen_count FROM hosts WHERE mac=?`, mac).Scan(&id, &seen)
-		if err == nil {
-			// Same hardware, possibly a new address: keep the row and its id.
-			if h.OpenPorts == nil {
-				h.OpenPorts = model.StringList{}
-			}
-			if h.Tags == nil {
-				h.Tags = model.StringList{}
-			}
-			_, err = s.db.Exec(`UPDATE hosts SET ip=?, mac=?, hostname=?, vendor=?, kind=?, iface=?, is_local=?, seen_count=?,
-				open_ports=?, tags=?, note=?, last_seen=?, source=? WHERE id=?`,
-				h.IP, mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1, h.OpenPorts, h.Tags, h.Note, now, h.Source, id)
-			h.ID = id
-			h.MAC = mac
-			h.SeenCount = seen + 1
-			h.LastSeen = now
-			return err
-		}
-		if err != sql.ErrNoRows {
-			return err
-		}
-	}
-
-	err = s.db.QueryRow(`SELECT id, seen_count FROM hosts WHERE ip=?`, h.IP).Scan(&id, &seen)
-	if err == nil {
-		if h.OpenPorts == nil {
-			h.OpenPorts = model.StringList{}
-		}
-		if h.Tags == nil {
-			h.Tags = model.StringList{}
-		}
-		_, err = s.db.Exec(`UPDATE hosts SET mac=?, hostname=?, vendor=?, kind=?, iface=?, is_local=?, seen_count=?,
-			open_ports=?, tags=?, note=?, last_seen=?, source=? WHERE id=?`,
-			mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1, h.OpenPorts, h.Tags, h.Note, now, h.Source, id)
-		h.ID = id
-		h.MAC = mac
-		h.SeenCount = seen + 1
-		h.LastSeen = now
-		return err
-	}
-	if err != sql.ErrNoRows {
-		return err
-	}
+	cands := hostCandidates(h)
 	if h.OpenPorts == nil {
 		h.OpenPorts = model.StringList{}
 	}
 	if h.Tags == nil {
 		h.Tags = model.StringList{}
 	}
-	res, err := s.db.Exec(`INSERT INTO hosts(ip, mac, hostname, vendor, kind, iface, is_local, seen_count, open_ports, tags, note, first_seen, last_seen, source)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		h.IP, mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), 1, h.OpenPorts, h.Tags, h.Note, now, now, h.Source)
+
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	id, _ = res.LastInsertId()
+	defer func() { _ = tx.Rollback() }()
+
+	id, seen, firstSeen, err := findHostRow(tx, mac, cands)
+	found := err == nil
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	// A new row may only be anchored at an address nobody else owns: hosts.ip is
+	// unique and an address already stored for another device stays there.
+	newIP := ""
+	if !found {
+		newIP, err = firstUnclaimedAddress(tx, cands)
+		if err != nil {
+			return err
+		}
+		if newIP == "" && len(cands) > 0 {
+			// Every observed address belongs to another row: fall back to the
+			// legacy behaviour of refreshing the owning row instead of failing.
+			id, seen, firstSeen, err = findHostRowByAddress(tx, cands)
+			switch {
+			case err == nil:
+				found = true
+			case err != sql.ErrNoRows:
+				return err
+			}
+		}
+	}
+
+	if found {
+		// Same hardware, possibly a new address: keep the row and its id. An
+		// observation without a MAC must not erase the MAC learned earlier.
+		_, err = tx.Exec(`UPDATE hosts SET mac=CASE WHEN ? <> '' THEN ? ELSE mac END,
+			hostname=?, vendor=?, kind=?, iface=?, is_local=?, seen_count=?,
+			open_ports=?, tags=?, note=?, last_seen=?, source=? WHERE id=?`,
+			mac, mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1,
+			h.OpenPorts, h.Tags, h.Note, now, h.Source, id)
+		if err != nil {
+			return err
+		}
+	} else {
+		res, ierr := tx.Exec(`INSERT INTO hosts(ip, mac, hostname, vendor, kind, iface, is_local, seen_count, open_ports, tags, note, first_seen, last_seen, source)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			newIP, mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), 1,
+			h.OpenPorts, h.Tags, h.Note, now, now, h.Source)
+		if ierr != nil {
+			return ierr
+		}
+		id, _ = res.LastInsertId()
+		seen = 0
+		firstSeen = now
+	}
 	h.ID = id
 	h.MAC = mac
-	h.SeenCount = 1
-	h.FirstSeen, h.LastSeen = now, now
-	return nil
+	h.SeenCount = seen + 1
+	h.FirstSeen = firstSeen
+	h.LastSeen = now
+
+	if err := mergeHostAddresses(tx, id, cands, now); err != nil {
+		return err
+	}
+	addrs, err := loadHostAddresses(tx, id)
+	if err != nil {
+		return err
+	}
+	if best, ok := pickPrimary(addrs); ok {
+		if err := setPrimaryIP(tx, id, best.IP); err != nil {
+			return err
+		}
+	}
+	// Report what is actually persisted: setPrimaryIP may have kept the previous
+	// value when another host row still owns the preferred address, and the MAC
+	// may have been preserved from an earlier observation.
+	var storedMAC, primaryIP string
+	if err := tx.QueryRow(`SELECT mac, ip FROM hosts WHERE id=?`, id).Scan(&storedMAC, &primaryIP); err != nil {
+		return err
+	}
+	h.MAC = storedMAC
+	h.IP = primaryIP
+	h.Addresses = addrs
+	annotatePrimaryAddress(h)
+	return tx.Commit()
 }
 
 // ListHosts returns known hosts.
@@ -242,25 +281,55 @@ func (s *Store) ListHosts(limit int) ([]model.Host, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []model.Host{}
+	hosts := []*model.Host{}
 	for rows.Next() {
 		h, err := scanHost(rows)
 		if err != nil {
 			return nil, err
 		}
+		hosts = append(hosts, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Close before the address query: the store runs on a single connection.
+	rows.Close()
+	if err := s.attachHostAddresses(hosts); err != nil {
+		return nil, err
+	}
+	out := make([]model.Host, 0, len(hosts))
+	for _, h := range hosts {
 		out = append(out, *h)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// GetHostByIP finds a host by address.
+// GetHostByIP finds a host by address. The address may be the primary one
+// (hosts.ip) or any secondary address recorded for the device, so callers that
+// scan an IPv6 address still find the host whose primary address is IPv4.
 func (s *Store) GetHostByIP(ip string) (*model.Host, error) {
-	row := s.db.QueryRow(`SELECT `+hostCols+` FROM hosts WHERE ip=?`, ip)
+	canonical, _ := canonicalAddress(ip)
+	if canonical == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRow(`SELECT `+hostCols+` FROM hosts h WHERE EXISTS (
+		SELECT 1 FROM host_addresses a WHERE a.host_id = h.id AND a.ip = ?) LIMIT 1`, canonical)
 	h, err := scanHost(row)
+	if err == sql.ErrNoRows {
+		// Legacy/manual rows written before host_addresses existed.
+		row = s.db.QueryRow(`SELECT `+hostCols+` FROM hosts WHERE ip=?`, canonical)
+		h, err = scanHost(row)
+	}
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return h, err
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachHostAddresses([]*model.Host{h}); err != nil {
+		return nil, err
+	}
+	return h, nil
 }
 
 // GetHostByMAC finds a host by hardware address. This is the stable identity a
@@ -275,7 +344,13 @@ func (s *Store) GetHostByMAC(mac string) (*model.Host, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return h, err
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachHostAddresses([]*model.Host{h}); err != nil {
+		return nil, err
+	}
+	return h, nil
 }
 
 // GetHostByID finds a host by primary key.
@@ -285,13 +360,31 @@ func (s *Store) GetHostByID(id int64) (*model.Host, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return h, err
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachHostAddresses([]*model.Host{h}); err != nil {
+		return nil, err
+	}
+	return h, nil
 }
 
-// DeleteHost removes a host observation.
+// DeleteHost removes a host observation and every address recorded for it.
+// The addresses are deleted explicitly because SQLite does not enforce the
+// foreign key (ON DELETE CASCADE) unless foreign_keys is enabled per connection.
 func (s *Store) DeleteHost(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM hosts WHERE id=?`, id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM host_addresses WHERE host_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM hosts WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CountHosts returns the number of known hosts.

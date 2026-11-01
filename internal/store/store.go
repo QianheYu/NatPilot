@@ -340,6 +340,13 @@ var postMigrations = []string{
 	// Identity by hardware address; hosts without one (loopback, virtual) are
 	// left alone by using a partial index.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_hosts_mac ON hosts(mac) WHERE mac <> ''`,
+	// A dual-stack device is observed over IPv4 and IPv6, and hosts.ip alone can
+	// only remember the last one. host_addresses keeps every address; the seed
+	// copies the addresses existing installations already have.
+	hostAddressDDL,
+	hostAddressIPIndexDDL,
+	hostAddressHostIndexDDL,
+	hostAddressSeedDDL,
 }
 
 func isDuplicateColumn(err error) bool {

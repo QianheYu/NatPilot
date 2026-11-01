@@ -15,6 +15,7 @@ import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
   groupBySubnet,
+  normMAC,
   readCollapsed,
   readGroupPref,
   rowKey,
@@ -43,7 +44,19 @@ const collapsedHosts = ref(readCollapsed('host'))
 const detailRows = ref(new Set())
 
 const hostIndex = computed(() => buildHostIndex(hosts.value))
-const tree = computed(() => groupBySubnet(ports.value, hostIndex.value, (p) => p.host, (p) => p.port))
+// 按主机分组（二级）优先 MAC，拿不到 MAC 时用主机 id —— 二者都比 IP 稳定，
+// 双栈设备的 v4 / v6 行因此只会占用一个主机节点。hosts 表拿不到时回调返回
+// 空字符串，分组自动退化回「按地址本身」（原行为）。
+const tree = computed(() =>
+  groupBySubnet(ports.value, hostIndex.value, (p) => p.host, (p) => p.port, {
+    hostKeyFor: (item, record) => {
+      if (!record) return ''
+      const mac = normMAC(record.mac)
+      if (mac) return `mac:${mac}`
+      return record.id != null && record.id !== '' ? `host:${record.id}` : ''
+    },
+  }),
+)
 const tableRows = computed(() =>
   grouped.value
     ? rowsForTree(tree.value, collapsedSubnets.value, collapsedHosts.value)
@@ -155,10 +168,23 @@ function portPreview(items) {
   return ports.length > 12 ? head + ' …' : head
 }
 
+// 主机表只用于「地址 → 主机」解析（MAC 优先，其次主机 id）。解析不到时
+// 分组自动退化为按地址本身，因此这里失败也不影响端口列表本身。
+async function loadHosts() {
+  try {
+    const res = await api.hosts({ limit: 2000 })
+    hosts.value = res.hosts || []
+  } catch {
+    hosts.value = []
+  }
+}
+
 function reload() {
   load()
   loadHosts()
-}const editor = reactive({ id: null, tags: [], note: '' })
+}
+
+const editor = reactive({ id: null, tags: [], note: '' })
 
 const statusOptions = [
   { value: '', label: '全部状态' },
@@ -365,7 +391,7 @@ onMounted(() => {
         <Switch v-model="filters.open_only" @update:model-value="load" />
         <span class="small dim">只看存活</span>
       </label>
-      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先 MAC，其次 IP）分组显示" @click="toggleGrouped">
+      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先 MAC，其次主机 id / IP）分组显示" @click="toggleGrouped">
         {{ grouped ? '已按主机分组' : '按主机分组' }}
       </button>
       <button v-if="grouped" class="btn" @click="toggleAllGroups">{{ allCollapsed ? '全部展开' : '全部折叠' }}</button>
@@ -431,7 +457,7 @@ onMounted(() => {
               <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
               <span class="g-title">{{ row.host.title }}</span>
               <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
-              <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
+              <span class="g-ip mono">{{ row.host.addrText || row.host.ip }}</span>
               <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
               <span class="g-tags"><span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">{{ s.label }} {{ s.count }}</span></span>
             </div>

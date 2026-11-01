@@ -302,6 +302,8 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 					h.Interface = n.Iface
 				}
 			}
+			// 记录本次发现的地址（含 IPv6 的 zone），让同一台设备的多栈地址合并到一行。
+			h.Addresses = []model.HostAddress{hostAddressFor(ip, h.Interface, "scan")}
 			h.Hostname = netutil.ReverseDNS(r.Context(), ip)
 			if err := s.app.Store.UpsertHost(h); err == nil {
 				added++
@@ -326,11 +328,16 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 		if hasIface && !strings.EqualFold(n.Iface, chosen.Name) {
 			continue
 		}
+		src := "arp"
+		if strings.Contains(n.IP, ":") {
+			src = "ndp"
+		}
 		h := &model.Host{
 			IP: n.IP, MAC: n.MAC, Vendor: n.Vendor, Interface: n.Iface,
-			IsLocal: local[n.IP], Kind: classifyHost(n.IP, ifaces), Source: "arp",
+			IsLocal: local[n.IP], Kind: classifyHost(n.IP, ifaces), Source: src,
 			Hostname: netutil.ReverseDNS(r.Context(), n.IP),
 		}
+		h.Addresses = []model.HostAddress{hostAddressFor(n.IP, n.Iface, src)}
 		if err := s.app.Store.UpsertHost(h); err == nil {
 			added++
 		}
@@ -343,6 +350,7 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 			IP: i.IP, MAC: i.MAC, Interface: i.Name, IsLocal: true,
 			Kind: "self", Source: "interface", Hostname: hostname(),
 		}
+		h.Addresses = []model.HostAddress{hostAddressFor(i.IP, i.Zone, "interface")}
 		_ = s.app.Store.UpsertHost(h)
 	}
 	s.app.Bus.PublishType("hosts", map[string]any{"count": added})
@@ -1272,3 +1280,14 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = bus.Event{}
+
+// hostAddressFor builds one address record for a host, filling the IPv6 family and
+// the link-local scope zone so a dual-stack device can merge its addresses into a
+// single host row.
+func hostAddressFor(ip, zone, source string) model.HostAddress {
+	addr := model.HostAddress{IP: ip, Family: model.IPFamily(ip), Zone: zone, Source: source}
+	if !strings.Contains(ip, ":") {
+		addr.Zone = ""
+	}
+	return addr
+}

@@ -10,7 +10,7 @@ import TagInput from '../components/TagInput.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, protocolTag, shortProvider, statusInfo, truncate } from '../utils/format'
-import { fmtHostPort } from '../utils/netaddr'
+import { addrFamily, fmtHostPort } from '../utils/netaddr'
 import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
@@ -105,6 +105,15 @@ function toggleAllGroups() {
 // itemsOf 把网段节点（含 hosts）或主机节点统一成条目数组。
 function itemsOf(node) {
   return node && node.hosts ? node.hosts.flatMap((h) => h.items) : (node && node.items) || []
+}
+
+// familyBadge 给「目标」列加一个极小的地址族徽标：双栈环境下目标写的是 v4 还是
+// v6 一眼可辨。无法判定的目标（主机名、self 等）不出徽标。
+function familyBadge(host) {
+  const fam = addrFamily(host)
+  if (fam === 'ipv6') return 'IPv6'
+  if (fam === 'ipv4') return 'IPv4'
+  return ''
 }
 
 // groupState 返回 all / some / none，用于分组复选框的勾选与半选状态。
@@ -447,7 +456,7 @@ onMounted(() => {
               <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
               <span class="g-title">{{ row.host.title }}</span>
               <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
-              <span class="g-ip mono">{{ row.host.mac ? row.host.subtitle : row.host.ip }}</span>
+              <span class="g-ip mono">{{ row.host.addrText || row.host.ip }}</span>
               <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
               <span class="g-tags"><span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">{{ s.label }} {{ s.count }}</span></span>
             </div>
@@ -461,7 +470,17 @@ onMounted(() => {
           </td>
                   <td class="mono small mute" data-label="ID">{{ row.item.id }}</td>
                   <td data-label="状态"><Badge :kind="statusInfo(row.item.mapping_status).kind" :dot="row.item.mapping_status === 'active'">{{ statusInfo(row.item.mapping_status).label }}</Badge></td>
-                  <td class="mono small" data-label="目标">{{ fmtHostPort(row.item.host, row.item.port) }}</td>
+                  <td class="mono small" data-label="目标">
+                    <span class="target-cell">
+                      <span
+                        v-if="familyBadge(row.item.host)"
+                        class="badge fam"
+                        :class="addrFamily(row.item.host) === 'ipv6' ? 'purple' : ''"
+                        :title="`目标地址族：${familyBadge(row.item.host)}`"
+                      >{{ familyBadge(row.item.host) }}</span>
+                      <span>{{ fmtHostPort(row.item.host, row.item.port) }}</span>
+                    </span>
+                  </td>
                   <td class="mono small" data-label="外部映射"><span v-if="row.item.external_port">{{ fmtHostPort(row.item.external_ip || '?', row.item.external_port) }}</span><span v-else class="mute">—</span></td>
                   <td data-label="协议"><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
                   <td data-label="标签"><span v-for="t in row.item.tags" :key="t" class="tag">{{ t }}</span><span v-if="!row.item.tags || !row.item.tags.length" class="mute small">—</span></td>

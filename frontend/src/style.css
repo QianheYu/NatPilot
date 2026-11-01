@@ -545,6 +545,77 @@ table.data th.mono {
   color: var(--danger);
 }
 
+/* ---------- addresses (dual-stack) ---------- */
+
+/* 一台主机可能同时有 IPv4 / IPv6 多条地址：chip 在单元格内换行，
+   行本身仍然只占一行高，不会把整行撑成多行块。 */
+.addr-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-width: 420px;
+}
+.addr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 21px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+/* 主地址：强调色描边 + 「主」角标。 */
+.addr-chip.primary {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.addr-chip .addr-fam {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--text-mute);
+}
+.addr-chip.primary .addr-fam {
+  color: var(--accent-2);
+}
+.addr-chip .addr-ip {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+/* 链路本地地址的 %zone 后缀保持弱化，双网卡同名 fe80:: 也能区分。 */
+.addr-chip .addr-zone {
+  color: var(--text-mute);
+  font-size: 11px;
+}
+.addr-chip .addr-main {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 13px;
+}
+/* 行内地址族指示器（v4 / v6 / v4·v6）：只占一小段内联宽度。 */
+.badge.fam {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.2px;
+}
+/* 目标列：家庭徽标 + 地址:端口 不换行。 */
+.target-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ---------- stat cards ---------- */
 
 .stat {
