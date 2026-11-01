@@ -111,7 +111,9 @@ type Mapper struct {
 
 // Auth holds authentication settings.
 type Auth struct {
-	Enabled         bool   `json:"enabled" yaml:"enabled"`
+	// Enabled 是三态：nil = 自动（server/web 要求登录，desktop 免登录），
+	// true/false = 显式开启/关闭。用指针是为了区分"没配置"与"明确关闭"。
+	Enabled         *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	RequireForWeb   bool   `json:"require_for_web" yaml:"require_for_web"`
 	BootstrapUser   string `json:"bootstrap_user" yaml:"bootstrap_user"`
 	BootstrapPass   string `json:"bootstrap_pass" yaml:"bootstrap_pass"`
@@ -144,13 +146,13 @@ type Retention struct {
 
 // Config is the root configuration object.
 type Config struct {
-	App      App      `json:"app" yaml:"app"`
-	HTTP     HTTP     `json:"http" yaml:"http"`
-	Database Database `json:"database" yaml:"database"`
-	Scanner  Scanner  `json:"scanner" yaml:"scanner"`
-	Mapper   Mapper   `json:"mapper" yaml:"mapper"`
-	Auth     Auth     `json:"auth" yaml:"auth"`
-	Log      Log      `json:"log" yaml:"log"`
+	App       App       `json:"app" yaml:"app"`
+	HTTP      HTTP      `json:"http" yaml:"http"`
+	Database  Database  `json:"database" yaml:"database"`
+	Scanner   Scanner   `json:"scanner" yaml:"scanner"`
+	Mapper    Mapper    `json:"mapper" yaml:"mapper"`
+	Auth      Auth      `json:"auth" yaml:"auth"`
+	Log       Log       `json:"log" yaml:"log"`
 	Retention Retention `json:"retention" yaml:"retention"`
 
 	Path string `json:"-" yaml:"-"`
@@ -216,7 +218,7 @@ func Default() *Config {
 		ConflictPolicy:   "skip",
 	}
 	c.Auth = Auth{
-		Enabled:         false,
+		// Enabled 保持 nil：由运行模式推导（server → 需要登录，desktop → 免登录）
 		RequireForWeb:   true,
 		BootstrapUser:   "admin",
 		BootstrapName:   "Administrator",
@@ -330,7 +332,7 @@ func applyEnv(c *Config) {
 		c.HTTP.SessionSecret = v
 	}
 	if v := os.Getenv("NATPILOT_AUTH"); v != "" {
-		c.Auth.Enabled = truthy(v)
+		c.SetAuthEnabled(truthy(v))
 	}
 	if v := os.Getenv("NATPILOT_ADMIN_USER"); v != "" {
 		c.Auth.BootstrapUser = v
@@ -384,7 +386,7 @@ func applyFlagValue(c *Config, key, value string) bool {
 	case "log-format":
 		c.Log.Format = value
 	case "auth":
-		c.Auth.Enabled = truthy(value)
+		c.SetAuthEnabled(truthy(value))
 	default:
 		return false
 	}
@@ -509,6 +511,14 @@ func structFieldByTag(rv reflect.Value, key string) (reflect.Value, bool) {
 }
 
 func assignValue(fv reflect.Value, raw string, ft reflect.Type) bool {
+	// 指针字段（如 *bool 的 auth.enabled）先分配再按元素类型赋值，
+	// 这样"设置页写入 auth.enabled"与"配置文件里写 enabled:"走同一条路径。
+	if ft.Kind() == reflect.Pointer {
+		if fv.IsNil() {
+			fv.Set(reflect.New(ft.Elem()))
+		}
+		return assignValue(fv.Elem(), raw, ft.Elem())
+	}
 	switch ft.Kind() {
 	case reflect.String:
 		fv.SetString(raw)
@@ -549,6 +559,11 @@ func (c *Config) RedactedMap() map[string]any {
 	out := map[string]any{}
 	_ = json.Unmarshal(b, &out)
 	redact(out)
+	// auth.enabled 是自动推导的（见 AuthEnabled），但设置页需要看到实际生效值，
+	// 否则开关会显示成"未设置"。
+	if authMap, ok := out["auth"].(map[string]any); ok {
+		authMap["enabled"] = c.AuthEnabled()
+	}
 	return out
 }
 
@@ -774,6 +789,32 @@ func (c *Config) DSN() string {
 // EffectiveMode resolves the auto mode into a concrete one. When natpilot is
 // started by a desktop shell (electron/tray wrapper) the environment variable
 // NATPILOT_DESKTOP=1 is set by that shell.
+// AuthExplicit reports the explicitly configured auth.enabled value, if any.
+func (c *Config) AuthExplicit() (value bool, set bool) {
+	if c.Auth.Enabled == nil {
+		return false, false
+	}
+	return *c.Auth.Enabled, true
+}
+
+// SetAuthEnabled records an explicit auth.enabled value.
+func (c *Config) SetAuthEnabled(v bool) {
+	b := v
+	c.Auth.Enabled = &b
+}
+
+// AuthEnabled reports whether authentication is in effect.
+//
+// Explicit configuration always wins. When it is unset, the deployment mode
+// decides: a server/web deployment binds a routable address and must require a
+// login, while desktop is a local-only single-user console and stays open.
+func (c *Config) AuthEnabled() bool {
+	if v, set := c.AuthExplicit(); set {
+		return v
+	}
+	return c.EffectiveMode() != ModeDesktop
+}
+
 func (c *Config) EffectiveMode() string {
 	m := strings.ToLower(strings.TrimSpace(c.HTTP.Mode))
 	if m == "" {
@@ -794,7 +835,9 @@ func (c *Config) EffectiveMode() string {
 	// Auto mode must not silently downgrade a service that was explicitly
 	// configured to require login: "natpilot --auth true serve" is documented as
 	// the server deployment, so honour that instead of guessing "desktop".
-	if c.Auth.Enabled {
+	// 只有"显式要求登录"才作为 server 部署的信号；
+	// 默认(nil)不能把 auto 一路推向 server，否则桌面版会被判成 server。
+	if v, set := c.AuthExplicit(); set && v {
 		return ModeServer
 	}
 	return ModeDesktop
@@ -862,7 +905,7 @@ func inContainer() bool {
 // bind address is routable the console requires login again, which keeps the
 // promise made in the README ("免登录仅对本机回环生效").
 func (c *Config) AuthRequired() bool {
-	if !c.Auth.Enabled {
+	if !c.AuthEnabled() {
 		return false
 	}
 	if c.EffectiveMode() == ModeDesktop && c.IsLoopbackHost() {

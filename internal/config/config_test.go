@@ -91,7 +91,7 @@ func TestLoadFromFileAndFlags(t *testing.T) {
 
 func TestAuthRequiredByMode(t *testing.T) {
 	c := Default()
-	c.Auth.Enabled = true
+	c.SetAuthEnabled(true)
 	c.Auth.RequireForWeb = true
 
 	c.HTTP.Mode = ModeServer
@@ -106,7 +106,7 @@ func TestAuthRequiredByMode(t *testing.T) {
 	if !c.AuthRequired() {
 		t.Errorf("web mode with auth enabled must require login")
 	}
-	c.Auth.Enabled = false
+	c.SetAuthEnabled(false)
 	c.HTTP.Mode = ModeServer
 	if c.AuthRequired() {
 		t.Errorf("auth disabled must not require login")
@@ -194,7 +194,7 @@ func TestAuthRequired(t *testing.T) {
 	t.Setenv("NATPILOT_SERVER", "")
 
 	c := Default()
-	c.Auth.Enabled = true
+	c.SetAuthEnabled(true)
 	c.Auth.RequireForWeb = true
 
 	c.HTTP.Mode = ModeDesktop
@@ -213,7 +213,7 @@ func TestAuthRequired(t *testing.T) {
 		t.Errorf("web mode must require login")
 	}
 
-	c.Auth.Enabled = false
+	c.SetAuthEnabled(false)
 	if c.AuthRequired() {
 		t.Errorf("auth disabled must not require login")
 	}
@@ -232,12 +232,12 @@ func TestEffectiveModeWithAuthImpliesServer(t *testing.T) {
 	c := Default()
 	c.HTTP.Mode = ModeAuto
 
-	c.Auth.Enabled = false
+	c.SetAuthEnabled(false)
 	if got := c.EffectiveMode(); got != ModeDesktop {
 		t.Fatalf("auto mode without auth = %q, want %q", got, ModeDesktop)
 	}
 
-	c.Auth.Enabled = true
+	c.SetAuthEnabled(true)
 	if got := c.EffectiveMode(); got != ModeServer {
 		t.Fatalf("auto mode with auth enabled = %q, want %q", got, ModeServer)
 	}

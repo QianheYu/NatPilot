@@ -77,7 +77,8 @@
 - 前端是独立子项目 `frontend/`，可单独开发（`npm run dev`，代理 `/api` 到后端）。
 - 布局为中台风格：左侧分组导航 + 顶部状态栏 + 卡片/表格/标签/状态徽章，暗色优先，支持亮色主题与响应式。
 - 部署形态：**桌面 GUI**（免登录）、**服务端 / Docker（Web，需登录）**。
-- 登录：启用后使用加密 Cookie 会话 + bcrypt 密码 + JWT API 令牌；桌面模式 `auth_required=false` 自动免登录。
+- 登录：Cookie 会话 + bcrypt 密码 + JWT API 令牌。**默认按模式决定**——server / web 模式要求登录，
+  desktop 模式（本机免登录）不需要；可用 `auth.enabled`（或 `--auth` / `NATPILOT_AUTH`）显式覆盖。
 
 ### 4. 扩展的自有功能（需求 12）
 
@@ -195,7 +196,7 @@ make all            # 等价于 make frontend && make build
 # 交叉编译全部六个目标（无需交叉工具链）
 make cross          # 产物在 dist/
 
-# 2. 运行（服务端模式，默认 0.0.0.0:8787，需登录）
+# 2. 运行（服务端模式，默认 0.0.0.0:8787，默认要求登录）
 ./bin/natpilot --auth true serve
 # 首次启动会打印随机生成的管理员密码，形如：
 #   NatPilot: generated administrator password for "admin": xxxxxxxxxxxxxxxx
@@ -370,6 +371,9 @@ docker build -t natpilot:dev .    # 等价
 
 Dockerfile 是三阶段构建（node 构建前端 → golang 编译并内嵌 → alpine 运行时），
 镜像里不需要 Node/Go/gcc。
+
+容器内是 **server 模式，默认要求登录**：首次启动会创建管理员并在日志打印随机密码
+（或用 `NATPILOT_ADMIN_PASSWORD` 指定）。想显式关闭可设 `NATPILOT_AUTH=false`。
 
 **容器以 root 运行**（镜像内不创建额外用户/组）。这是刻意的：绑定挂载宿主目录时，
 容器内 uid 与宿主属主不一致会导致 SQLite 打不开库文件：
@@ -621,6 +625,26 @@ log:
 界面「系统设置」保存的项目会写入 SQLite `settings` 表并在启动时重新应用（列表类配置如 `mapper.protocols` 用逗号分隔字符串）。
 
 ---
+
+### 认证默认行为（auth.enabled）
+
+`auth.enabled` 是**三态**：
+
+| 配置值 | 行为 |
+| --- | --- |
+| 未设置（默认） | 按模式决定：`server` / `web` → 要求登录；`desktop` → 免登录 |
+| `true` | 强制要求登录（同时把 auto 模式判为 server 部署） |
+| `false` | 明确关闭登录（即使 server 模式也免登录，谨慎使用） |
+
+对应环境变量 `NATPILOT_AUTH`、命令行 `--auth true|false`。首次启动且库里没有账号时，
+会创建引导管理员并在日志里打印一次密码：
+
+```
+NatPilot: generated administrator password for "admin": xxxxxxxxxxxxxxxx
+```
+
+> 非回环地址 + 未启用认证时，启动会向 stderr 打印 `[SECURITY] ...` 警告
+> （即使 `log.level=off` 也会输出），避免"免登录控制台暴露在网络上"却无人察觉。
 
 ### 保留策略（retention）
 

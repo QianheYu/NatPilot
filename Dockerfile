@@ -78,6 +78,9 @@ COPY --from=backend /out/natpilot /usr/local/bin/natpilot
 # SQLITE_CANTOPEN (14)。需要非 root 运行时用 `docker run --user <uid>:<gid>`
 # 覆盖即可，前提是该 uid 对 /var/lib/natpilot 有写权限。
 RUN mkdir -p /var/lib/natpilot
+# NATPILOT_SERVER=1 → server 模式 → 默认要求登录（auth.enabled 未设置时按模式推导）。
+# 首次启动会创建管理员并打印随机密码；也可以用 NATPILOT_ADMIN_PASSWORD 指定。
+# 想让容器免登录（不推荐）可显式设置 NATPILOT_AUTH=false。
 ENV NATPILOT_DATA_DIR=/var/lib/natpilot \
     NATPILOT_HOST=0.0.0.0 \
     NATPILOT_PORT=8787 \

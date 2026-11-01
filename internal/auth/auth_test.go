@@ -62,7 +62,7 @@ func newAuthForTest(t *testing.T) (*Service, *store.Store, *config.Config) {
 	cfg.App.DataDir = dir
 	cfg.Database.Path = dbPath
 	cfg.HTTP.SessionSecret = testSessionSecret
-	cfg.Auth.Enabled = true
+	cfg.SetAuthEnabled(true)
 	cfg.Auth.RequireForWeb = true
 	cfg.Auth.SessionTTLHours = 72
 	cfg.Auth.LockoutAttempts = 8
@@ -637,7 +637,7 @@ func TestIdentityForRequest(t *testing.T) {
 
 	// Open (desktop) mode: no credentials are required and the caller is the local
 	// operator.
-	cfg.Auth.Enabled = false
+	cfg.SetAuthEnabled(false)
 	open := svc.IdentityForRequest(httptest.NewRequest(http.MethodGet, "/", nil))
 	if open.Auth {
 		t.Errorf("open mode identity must not be authenticated: %+v", open)
@@ -645,7 +645,7 @@ func TestIdentityForRequest(t *testing.T) {
 	if open.Username != "local" || open.Role != "admin" || !open.IsAdmin() {
 		t.Errorf("open mode identity = %+v, want the local admin", open)
 	}
-	cfg.Auth.Enabled = true
+	cfg.SetAuthEnabled(true)
 
 	cases := []struct {
 		name     string
