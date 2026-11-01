@@ -289,9 +289,15 @@ func cmdServe(ctx context.Context, flags map[string]string, args []string) int {
 		return 1
 	}
 	actual := ln.Addr().String()
+	shown := displayAddr(actual)
 	fmt.Printf("%s\n", versionString())
 	fmt.Printf("  mode         : %s\n", mode)
-	fmt.Printf("  listening    : http://%s\n", displayAddr(actual))
+	fmt.Printf("  listening    : http://%s\n", shown)
+	if shown != actual {
+		// 绑定在 0.0.0.0/[::] 时，listening 行显示的是可点击的本机地址；
+		// 这里补一行真实绑定，避免被误读成"只监听了回环"。
+		fmt.Printf("  bind         : %s (all interfaces)\n", actual)
+	}
 	fmt.Printf("  data dir     : %s\n", a.Config.App.DataDir)
 	fmt.Printf("  database     : %s\n", a.Config.Database.Path)
 	fmt.Printf("  auth         : %v\n", a.Auth.Enabled())
