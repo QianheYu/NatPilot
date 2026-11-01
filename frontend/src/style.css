@@ -617,6 +617,27 @@ table.data th.mono {
   white-space: nowrap;
 }
 
+/* 主机名单元格：名称 + 行内 ✎。名称绑定到 MAC，没名称时给出可点的占位提示。 */
+.hostname-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 240px;
+}
+.hostname-cell .hostname-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hostname-cell .hostname-text.empty {
+  color: var(--text-mute);
+}
+.hostname-cell .hostname-edit {
+  flex: none;
+  padding: 0 4px;
+  line-height: 1;
+}
+
 /* ---------- stat cards ---------- */
 
 .stat {

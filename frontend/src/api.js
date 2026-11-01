@@ -149,6 +149,8 @@ export const api = {
   hosts: (query) => get('/api/hosts', query),
   hostScan: (body) => post('/api/hosts/scan', body || {}),
   deleteHost: (id) => del(`/api/hosts/${id}`),
+  // 主机名/备注/标签都挂在主机记录（即 MAC）上，换 IP 不会丢。
+  patchHost: (id, body) => patch(`/api/hosts/${id}`, body),
   // Per-host monitoring: policies bound to the host's MAC (DHCP-safe).
   hostPolicies: (id) => get(`/api/hosts/${id}/policies`),
   createHostPolicy: (id, body) => post(`/api/hosts/${id}/policies`, body),

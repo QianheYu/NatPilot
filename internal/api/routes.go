@@ -74,6 +74,7 @@ func (s *Server) routes() {
 	// change does not break them. A host may have several such policies.
 	m.HandleFunc("GET /api/hosts/{id}/policies", s.authMiddleware(s.handleListHostPolicies))
 	m.HandleFunc("POST /api/hosts/{id}/policies", s.writeMiddleware(s.handleCreateHostPolicy))
+	m.HandleFunc("PATCH /api/hosts/{id}", s.writeMiddleware(s.handlePatchHost))
 	m.HandleFunc("DELETE /api/hosts/{id}", s.writeMiddleware(s.handleDeleteHost))
 
 	// ---- schedules ----

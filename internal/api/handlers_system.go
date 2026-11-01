@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -199,6 +200,78 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts, "total": len(hosts)})
 }
 
+// hostIdentityRequest is the body of PATCH /api/hosts/{id}. Every field is
+// optional; only the ones present are applied.
+type hostIdentityRequest struct {
+	Hostname *string   `json:"hostname"`
+	Note     *string   `json:"note"`
+	Tags     *[]string `json:"tags"`
+}
+
+// handlePatchHost lets a user correct the name/note/tags that stick to a MAC.
+//
+// A user-set hostname must survive later reverse-DNS lookups, so discovery only
+// fills an empty hostname (see hostnameIfUnknown) and UpsertHost keeps an empty
+// observation from erasing it. The MAC itself is not editable: host-bound
+// policies follow it.
+func (s *Server) handlePatchHost(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	host, err := s.app.Store.GetHostByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	var req hostIdentityRequest
+	if err := decodeJSONLoose(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	hostname, note, tags := host.Hostname, host.Note, []string(host.Tags)
+	if req.Hostname != nil {
+		hostname = strings.TrimSpace(*req.Hostname)
+	}
+	if req.Note != nil {
+		note = *req.Note
+	}
+	if req.Tags != nil {
+		tags = *req.Tags
+	}
+	if err := s.app.Store.SetHostIdentity(id, hostname, note, tags); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.audit(r, "host.identity", fmt.Sprintf("host #%d", id), hostname, true)
+	fresh, err := s.app.Store.GetHostByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"host": fresh})
+}
+
+// hostnameIfUnknown resolves a reverse-DNS name only when the host has no name
+// yet. A PTR record is a guess; a user-corrected name (PATCH /api/hosts/{id})
+// or a name learned earlier must never be overwritten by it.
+func (s *Server) hostnameIfUnknown(ctx context.Context, ip, mac string) string {
+	if h, err := s.app.Store.GetHostByIP(ip); err == nil && h != nil && strings.TrimSpace(h.Hostname) != "" {
+		return ""
+	}
+	if strings.TrimSpace(mac) != "" {
+		if h, err := s.app.Store.GetHostByMAC(mac); err == nil && h != nil && strings.TrimSpace(h.Hostname) != "" {
+			return ""
+		}
+	}
+	return netutil.ReverseDNS(ctx, ip)
+}
+
 // handleHostScan discovers hosts on the LAN. The request body is optional:
 //
 //	{}                                             passive: read the OS neighbour table
@@ -304,7 +377,7 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 			}
 			// 记录本次发现的地址（含 IPv6 的 zone），让同一台设备的多栈地址合并到一行。
 			h.Addresses = []model.HostAddress{hostAddressFor(ip, h.Interface, "scan")}
-			h.Hostname = netutil.ReverseDNS(r.Context(), ip)
+			h.Hostname = s.hostnameIfUnknown(r.Context(), ip, h.MAC)
 			if err := s.app.Store.UpsertHost(h); err == nil {
 				added++
 			}
@@ -335,7 +408,7 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 		h := &model.Host{
 			IP: n.IP, MAC: n.MAC, Vendor: n.Vendor, Interface: n.Iface,
 			IsLocal: local[n.IP], Kind: classifyHost(n.IP, ifaces), Source: src,
-			Hostname: netutil.ReverseDNS(r.Context(), n.IP),
+			Hostname: s.hostnameIfUnknown(r.Context(), n.IP, n.MAC),
 		}
 		h.Addresses = []model.HostAddress{hostAddressFor(n.IP, n.Iface, src)}
 		if err := s.app.Store.UpsertHost(h); err == nil {

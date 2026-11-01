@@ -44,9 +44,18 @@ func TestRuleCRUD(t *testing.T) {
 		t.Errorf("tags = %v", got.Tags)
 	}
 
-	// The (host,port,protocol) tuple is unique.
-	if _, err := st.CreateRule(&model.Rule{Host: "127.0.0.1", Port: 8080, Protocol: model.ProtoTCP}); err == nil {
-		t.Errorf("expected a unique constraint violation for a duplicate rule")
+	// The (host,port,protocol) tuple is unique. Creating it again updates the
+	// row in place instead of failing: the identity is the service, and the
+	// caller (scanner/API) must not get a hard error for a re-observation.
+	dupID, err := st.CreateRule(&model.Rule{Host: "127.0.0.1", Port: 8080, Protocol: model.ProtoTCP})
+	if err != nil {
+		t.Errorf("duplicate CreateRule failed instead of updating: %v", err)
+	}
+	if dupID != id {
+		t.Errorf("duplicate CreateRule returned id %d, want the existing %d", dupID, id)
+	}
+	if list, total, _ := st.ListRules(RuleFilter{}); total != 1 || len(list) != 1 {
+		t.Errorf("duplicate CreateRule created another row: total=%d list=%d", total, len(list))
 	}
 
 	got.Note = "updated"

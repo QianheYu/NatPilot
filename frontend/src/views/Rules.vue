@@ -15,7 +15,7 @@ import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
   groupBySubnet,
-  hostRecordKey,
+  itemHostKey,
   readCollapsed,
   readGroupPref,
   rowKey,
@@ -42,11 +42,12 @@ const collapsedHosts = ref(readCollapsed('host'))
 const detailRows = ref(new Set())
 
 const hostIndex = computed(() => buildHostIndex(hosts.value))
-// 与端口页一致：解析到主机时用 MAC（无 MAC 用主机 id）作二级键，
-// 双栈设备的 v4 / v6 规则只会占用一个主机节点。
+// 与端口页一致：优先用后端行内 join 的 host_id（host:<id>），老后端没有 host_id
+// 时退回 MAC / 主机 id —— host_id 路径不依赖 hosts 表，双栈设备的 v4 / v6 规则
+// 也只会占用一个主机节点。
 const tree = computed(() =>
   groupBySubnet(rules.value, hostIndex.value, (r) => r.host, (r) => r.port, {
-    hostKeyFor: (item, record) => hostRecordKey(record),
+    hostKeyFor: (item, record) => itemHostKey(item, record),
   }),
 )
 const tableRows = computed(() =>
@@ -114,10 +115,18 @@ function itemsOf(node) {
   return node && node.hosts ? node.hosts.flatMap((h) => h.items) : (node && node.items) || []
 }
 
+// rowFamily 判定目标地址族：优先用后端行内 join 的 family（规则行现在带
+// host_id/family），老版本响应没有该字段时按地址字面量反推。
+function rowFamily(item) {
+  const fam = String((item && item.family) || '').toLowerCase()
+  if (fam === 'ipv4' || fam === 'ipv6') return fam
+  return addrFamily(item && item.host)
+}
+
 // familyBadge 给「目标」列加一个极小的地址族徽标：双栈环境下目标写的是 v4 还是
 // v6 一眼可辨。无法判定的目标（主机名、self 等）不出徽标。
-function familyBadge(host) {
-  const fam = addrFamily(host)
+function familyBadge(item) {
+  const fam = rowFamily(item)
   if (fam === 'ipv6') return 'IPv6'
   if (fam === 'ipv4') return 'IPv4'
   return ''
@@ -410,7 +419,7 @@ onMounted(() => {
       <select v-model="filters.tags" class="select" style="width: 150px" multiple size="1" @change="load">
         <option v-for="(c, t) in allTags" :key="t" :value="t">{{ t }} ({{ c }})</option>
       </select>
-      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先 MAC，其次 IP）分组显示" @click="toggleGrouped">
+      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先行内 host_id，其次 MAC / 主机 id / IP）分组显示" @click="toggleGrouped">
         {{ grouped ? '已按主机分组' : '按主机分组' }}
       </button>
       <button v-if="grouped" class="btn" @click="toggleAllGroups">{{ allCollapsed ? '全部展开' : '全部折叠' }}</button>
@@ -462,7 +471,7 @@ onMounted(() => {
               <GroupCheckbox class="grp-check" :checked="groupState(itemsOf(row.host)) === 'all'" :indeterminate="groupState(itemsOf(row.host)) === 'some'" :disabled="!itemsOf(row.host).length" :title="'选中该主机下全部 ' + itemsOf(row.host).length + ' 条'" @change="toggleGroupSelect(itemsOf(row.host))" />
               <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
               <span class="g-title">{{ row.host.title }}</span>
-              <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
+              <span v-if="row.host.mac && !row.host.hostname" class="g-mac mono">{{ row.host.mac }}</span>
               <span class="g-ip mono">{{ row.host.addrText || row.host.ip }}</span>
               <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
               <span class="g-tags"><span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">{{ s.label }} {{ s.count }}</span></span>
@@ -480,11 +489,11 @@ onMounted(() => {
                   <td class="mono small" data-label="目标">
                     <span class="target-cell">
                       <span
-                        v-if="familyBadge(row.item.host)"
+                        v-if="familyBadge(row.item)"
                         class="badge fam"
-                        :class="addrFamily(row.item.host) === 'ipv6' ? 'purple' : ''"
-                        :title="`目标地址族：${familyBadge(row.item.host)}`"
-                      >{{ familyBadge(row.item.host) }}</span>
+                        :class="rowFamily(row.item) === 'ipv6' ? 'purple' : ''"
+                        :title="`目标地址族：${familyBadge(row.item)}`"
+                      >{{ familyBadge(row.item) }}</span>
                       <span>{{ fmtHostPort(row.item.host, row.item.port) }}</span>
                     </span>
                   </td>

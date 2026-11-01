@@ -70,6 +70,13 @@ type Rule struct {
 	Enabled     bool       `json:"enabled"`
 	AutoCreated bool       `json:"auto_created"`
 	Source      string     `json:"source"` // manual|scan|import|api
+
+	// HostID ties the rule to one host row instead of an IP literal, so the
+	// same service on a dual-stack device is one rule and not two. Family is
+	// the address family of Host ("ipv4"/"ipv6"). Host stays the concrete
+	// address the mapping points at.
+	HostID int64  `json:"host_id"`
+	Family string `json:"family,omitempty"`
 	// Provider pins the rule to one gateway (provider key, see providerKey).
 	// Empty means "automatic": preferred gateway first, then by protocol rank.
 	Provider  string `json:"gateway"`
@@ -77,6 +84,8 @@ type Rule struct {
 	UpdatedAt Time   `json:"updated_at"`
 
 	// Join / computed fields (not persisted).
+	MAC           string  `json:"mac,omitempty"`
+	Hostname      string  `json:"hostname,omitempty"`
 	ExternalIP    string  `json:"external_ip,omitempty"`
 	ExternalPort  int     `json:"external_port,omitempty"`
 	Status        string  `json:"status,omitempty"`
@@ -107,6 +116,10 @@ type DiscoveredPort struct {
 	ScanID     int64      `json:"scan_id"`
 	RuleID     int64      `json:"rule_id,omitempty"`
 	Host       string     `json:"host"`
+	HostID     int64      `json:"host_id"`
+	Family     string     `json:"family,omitempty"`
+	MAC        string     `json:"mac,omitempty"`
+	Hostname   string     `json:"hostname,omitempty"`
 	Port       int        `json:"port"`
 	Protocol   string     `json:"protocol"`
 	Status     string     `json:"status"`

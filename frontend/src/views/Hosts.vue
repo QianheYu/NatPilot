@@ -22,6 +22,11 @@ const policies = ref([])
 
 const monitorHost = ref(null)
 const saving = ref(false)
+// 主机名手动编辑：名称挂在主机记录（即 MAC）上 —— 用 PATCH /api/hosts/{id}
+// 保存后，后端把该名称写回这条 MAC 记录，IP 变化（DHCP 换址）也不会丢。
+const renameHost = ref(null)
+const hostnameDraft = ref('')
+const savingName = ref(false)
 // 与 PolicyFields 组件一一对应：主机入口和策略页共享同一份字段定义。
 function emptyPolicyForm() {
   return {
@@ -182,6 +187,41 @@ async function removeHost(h) {
     load()
   } catch (err) {
     toastErr(err.message, '删除失败')
+  }
+}
+
+// ---- 主机名：绑定到 MAC，可手动修正 ----
+// 主机名不是由 IP 决定的：相同的 MAC 换到新地址后仍沿用同一个名称。没名称时
+// 用它显示占位提示，并允许就地修改（名称会写回这条主机记录）。
+function hostnameTitle(h) {
+  const mac = h && h.mac ? h.mac : '（无 MAC）'
+  return `名称绑定到 MAC ${mac}，通过 PTR 或手动设置；IP 变化后仍沿用该名称`
+}
+
+function openRename(h) {
+  renameHost.value = h
+  hostnameDraft.value = h.hostname || ''
+}
+
+function closeRename() {
+  renameHost.value = null
+  hostnameDraft.value = ''
+}
+
+async function saveHostname() {
+  const h = renameHost.value
+  if (!h) return
+  const name = hostnameDraft.value.trim()
+  savingName.value = true
+  try {
+    await api.patchHost(h.id, { hostname: name })
+    toastOk(name ? `已将主机名设为 ${name}` : '已清除主机名，下次发现/扫描时再按 PTR 解析')
+    closeRename()
+    await load()
+  } catch (err) {
+    toastErr(err.message, '主机名保存失败')
+  } finally {
+    savingName.value = false
   }
 }
 
@@ -795,7 +835,23 @@ onBeforeUnmount(clearPoll)
                 </td>
                 <td class="mono small mute">{{ h.mac || '—' }}</td>
                 <td class="small">{{ h.vendor || '—' }}</td>
-                <td class="small">{{ h.hostname || '—' }}</td>
+                <td class="small" data-label="主机名" :title="hostnameTitle(h)">
+                  <div class="hostname-cell">
+                    <span
+                      class="hostname-text"
+                      :class="{ empty: !h.hostname }"
+                      :title="hostnameTitle(h)"
+                    >{{ h.hostname || '未命名（点击 ✎ 设置）' }}</span>
+                    <button
+                      class="btn sm ghost hostname-edit"
+                      :disabled="!canWrite()"
+                      :title="`${h.hostname ? '修改' : '设置'}主机名（绑定到 MAC ${h.mac || '—'}）`"
+                      @click.stop="openRename(h)"
+                    >
+                      ✎
+                    </button>
+                  </div>
+                </td>
                 <td>
                   <Badge :kind="h.is_local ? 'accent' : h.kind === 'gateway' ? 'purple' : 'default'">
                     {{ h.is_local ? '本机' : h.kind || '对端' }}
@@ -1060,6 +1116,30 @@ onBeforeUnmount(clearPoll)
         <button class="btn ghost" @click="closeMonitor">关闭</button>
         <button class="btn primary" :disabled="saving || !canWrite()" @click="addPolicy">
           <span v-if="saving" class="spin">◌</span>添加策略
+        </button>
+      </template>
+    </Modal>
+
+    <!-- 主机名：绑定到 MAC，可手动修正（PATCH /api/hosts/{id}） -->
+    <Modal v-if="renameHost" title="设置主机名" @close="closeRename">
+      <div class="small dim" style="margin-bottom: 12px">
+        名称绑定到 MAC <span class="mono">{{ renameHost.mac || '（无 MAC）' }}</span>：
+        同一块网卡换 IP 后仍沿用这个名称。后端会先尝试 PTR 解析，这里手动填写的值优先并固定下来。
+      </div>
+      <label class="field">
+        <span>主机名</span>
+        <input
+          v-model="hostnameDraft"
+          class="input"
+          placeholder="例如 router.lan、nas 或 路由器"
+          @keydown.enter.prevent="saveHostname"
+        />
+        <div class="hint">留空保存 = 清除手动名称，回到 PTR 解析结果。</div>
+      </label>
+      <template #footer>
+        <button class="btn" @click="closeRename">取消</button>
+        <button class="btn primary" :disabled="savingName" @click="saveHostname">
+          <span v-if="savingName" class="spin">◌</span>保存
         </button>
       </template>
     </Modal>

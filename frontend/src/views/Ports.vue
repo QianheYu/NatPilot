@@ -10,12 +10,12 @@ import TagInput from '../components/TagInput.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
-import { fmtHostPort } from '../utils/netaddr'
+import { fmtHostPort, addrFamily } from '../utils/netaddr'
 import { useLive } from '../composables/useLive'
 import {
   buildHostIndex,
   groupBySubnet,
-  hostRecordKey,
+  itemHostKey,
   readCollapsed,
   readGroupPref,
   rowKey,
@@ -44,12 +44,12 @@ const collapsedHosts = ref(readCollapsed('host'))
 const detailRows = ref(new Set())
 
 const hostIndex = computed(() => buildHostIndex(hosts.value))
-// 按主机分组（二级）优先 MAC，拿不到 MAC 时用主机 id —— 二者都比 IP 稳定，
-// 双栈设备的 v4 / v6 行因此只会占用一个主机节点。hosts 表拿不到时回调返回
-// 空字符串，分组自动退化回「按地址本身」（原行为）。
+// 按主机分组（二级）：优先用后端行内 join 的 host_id（host:<id>），老后端没有
+// host_id 时退回 MAC、再退回主机 id —— 都比 IP 稳定，且 host_id 路径完全不依赖
+// hosts 表是否加载成功。双栈设备的 v4 / v6 行因此只会占用一个主机节点。
 const tree = computed(() =>
   groupBySubnet(ports.value, hostIndex.value, (p) => p.host, (p) => p.port, {
-    hostKeyFor: (item, record) => hostRecordKey(record),
+    hostKeyFor: (item, record) => itemHostKey(item, record),
   }),
 )
 const tableRows = computed(() =>
@@ -177,6 +177,19 @@ async function loadHosts() {
 function reload() {
   load()
   loadHosts()
+}
+
+// 每行的地址族徽标（v4 / v6）：优先用后端行内 join 的 family（端口行现在带
+// host_id/family），老版本响应没有该字段时按地址字面量反推，无法判定则不出徽标。
+function rowFamily(item) {
+  const fam = String((item && item.family) || '').toLowerCase()
+  if (fam === 'ipv4' || fam === 'ipv6') return fam
+  return addrFamily(item && item.host)
+}
+
+function familyShort(item) {
+  const fam = rowFamily(item)
+  return fam === 'ipv6' ? 'v6' : fam === 'ipv4' ? 'v4' : ''
 }
 
 const editor = reactive({ id: null, tags: [], note: '' })
@@ -386,7 +399,7 @@ onMounted(() => {
         <Switch v-model="filters.open_only" @update:model-value="load" />
         <span class="small dim">只看存活</span>
       </label>
-      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先 MAC，其次主机 id / IP）分组显示" @click="toggleGrouped">
+      <button class="btn" :class="grouped ? 'primary' : ''" title="按主机（优先行内 host_id，其次 MAC / 主机 id / IP）分组显示" @click="toggleGrouped">
         {{ grouped ? '已按主机分组' : '按主机分组' }}
       </button>
       <button v-if="grouped" class="btn" @click="toggleAllGroups">{{ allCollapsed ? '全部展开' : '全部折叠' }}</button>
@@ -451,7 +464,7 @@ onMounted(() => {
               <GroupCheckbox class="grp-check" :checked="groupState(itemsOf(row.host)) === 'all'" :indeterminate="groupState(itemsOf(row.host)) === 'some'" :disabled="!itemsOf(row.host).length" :title="'选中该主机下全部 ' + itemsOf(row.host).length + ' 条'" @change="toggleGroupSelect(itemsOf(row.host))" />
               <span class="g-chev">{{ collapsedHosts.has(row.host.key) ? '▸' : '▾' }}</span>
               <span class="g-title">{{ row.host.title }}</span>
-              <span v-if="row.host.mac" class="g-mac mono">{{ row.host.mac }}</span>
+              <span v-if="row.host.mac && !row.host.hostname" class="g-mac mono">{{ row.host.mac }}</span>
               <span class="g-ip mono">{{ row.host.addrText || row.host.ip }}</span>
               <span class="g-chip">{{ itemsOf(row.host).length }} 条</span>
               <span class="g-tags"><span v-for="s in groupSummary(itemsOf(row.host))" :key="s.label" class="g-tag" :class="s.kind">{{ s.label }} {{ s.count }}</span></span>
@@ -465,7 +478,17 @@ onMounted(() => {
             <input type="checkbox" :checked="selected.has(row.item.id)" @change="toggleSelect(row.item.id)" />
           </td>
                   <td data-label="状态"><Badge :kind="portStatusInfo(row.item.status).kind">{{ portStatusInfo(row.item.status).label }}</Badge></td>
-                  <td class="mono small" data-label="主机:端口">{{ fmtHostPort(row.item.host, row.item.port) }}</td>
+                  <td class="mono small" data-label="主机:端口">
+                    <span class="target-cell">
+                      <span
+                        v-if="familyShort(row.item)"
+                        class="badge fam"
+                        :class="rowFamily(row.item) === 'ipv6' ? 'purple' : ''"
+                        :title="`地址族：${rowFamily(row.item) === 'ipv6' ? 'IPv6' : 'IPv4'}`"
+                      >{{ familyShort(row.item) }}</span>
+                      <span>{{ fmtHostPort(row.item.host, row.item.port) }}</span>
+                    </span>
+                  </td>
                   <td data-label="协议"><Badge :kind="protocolTag(row.item.protocol).kind">{{ protocolTag(row.item.protocol).label }}</Badge></td>
                   <td class="small" data-label="服务">{{ row.item.service || '—' }}</td>
                   <td class="small dim" data-label="进程">{{ truncate(row.item.process, 30) || '—' }}</td>

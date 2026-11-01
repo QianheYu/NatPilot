@@ -4,18 +4,22 @@
 //   一级 网段（IPv4 取 /24；127.x → 本机回环；IPv6 交给 groupIPv6：
 //         ::1 → 本机回环、fe80::/10 → 链路本地、其余取 /64 桶；
 //         主机名 → 其它主机）
-//   二级 主机（优先 MAC，解析不到退化为 IP —— 见 hostKeyFor 的说明）
+//   二级 主机（优先服务端 host_id，其次 MAC / record.id，解析不到退化为 IP ——
+//         见 itemHostKey 与 hostKeyFor 的说明）
 // 第三层就是原来的数据行，行内可再展开详情（由页面自己维护展开集合）。
 //
-// 为什么二级键优先 MAC：规则与端口记录里只存 IP，而 IP 会随 DHCP 变化；hosts 表
-// 以 MAC 为身份，端口↔策略绑定也走 MAC。所以能从 /api/hosts 解析出该 IP 当前所属
-// 主机的 MAC 时就用 mac:<mac> 作键 —— 设备换地址后仍留在同一台主机下，标题里的
-// 「当前 IP」跟着更新；解析不到则退化为 ip:<ip>，否则这些行会从界面上消失。
+// 为什么二级键优先「主机身份」而不是 IP：规则与端口记录里的 IP 会随 DHCP 变化；
+// hosts 表以 MAC 为身份，端口↔策略绑定也走 MAC。后端现在还会给每条端口/规则行
+// join 上 host_id（0 = 未解析）、family 以及所属主机的 mac / hostname，因此
+// itemHostKey 优先用 host:<id> 作键 —— 设备换地址后仍留在同一台主机下，标题里的
+// 「当前 IP」跟着更新；老后端没有 host_id 时退回 mac:<mac>，再解析不到才退化为
+// ip:<ip>，否则这些行会从界面上消失（向后兼容）。
 //
-// 双栈（同一设备既有 IPv4 又有 IPv6）：主机记录现在带 addresses[]，索引把每条
-// 地址都映射到同一条记录，一级网段按该记录的「主地址」（hosts[].ip，v4 优先）算，
-// 于是同一台设备的 v4 / v6 行落在同一个网段节点、同一个主机节点下，而不是被拆成
-// 两段。没有 hosts 数据时自然退化回「按地址本身分组」。
+// 双栈（同一设备既有 IPv4 又有 IPv6）：主机记录带 addresses[]，索引把每条地址都
+// 映射到同一条记录，一级网段按该记录的「主地址」（hosts[].ip，v4 优先）算；行内
+// 带着 host_id 时更简单 —— 同一个 host_id 的所有行共用第一次出现的网段，于是同一
+// 台设备的 v4 / v6 行落在同一个网段节点、同一个主机节点下，而不是被拆成两段。
+// 行内没有 host_id 且没有 hosts 数据时自然退化回「按地址本身分组」。
 
 import { fmtHost, groupIPv6, isIPv6 } from '../utils/netaddr'
 
@@ -88,14 +92,45 @@ export function hostKeyFor(ip, index) {
 }
 
 // hostRecordKey is the stable per-host identity the views pass through
-// groupBySubnet's optional `hostKeyFor`: MAC when the host has one, else the
-// hosts[].id (so a MAC-less dual-stack device still occupies one node), else ''
-// so the caller falls back to the built-in MAC/IP key.
-export function hostRecordKey(record) {
+// groupBySubnet's optional `hostKeyFor`: the server-assigned host_id when the
+// row carries one, else MAC when the host has one, else the hosts[].id (so a
+// MAC-less dual-stack device still occupies one node), else '' so the caller
+// falls back to the built-in MAC/IP key.
+//
+// The optional `item` argument is the row that produced the record (port/rule
+// rows now carry `host_id`); omitting it keeps the old record-only behaviour,
+// so existing callers are unaffected. Views normally use itemHostKey(), which
+// also picks up the row's joined MAC.
+export function hostRecordKey(record, item) {
+  const hostID = Number(item && item.host_id)
+  if (Number.isFinite(hostID) && hostID > 0) return `host:${hostID}`
   if (!record) return ''
   const mac = normMAC(record.mac)
   if (mac) return `mac:${mac}`
   return record.id != null && record.id !== '' ? `host:${record.id}` : ''
+}
+
+// itemHostKey returns the level-2 key for one row, preferring the identity the
+// server assigns to the host. Precedence:
+//
+//   1. item.host_id > 0        → host:<id>   （最可靠：双栈/换 IP 都稳定，
+//                                且完全不依赖 hosts[] 是否加载成功）
+//   2. MAC（行内 join，其次 hosts 记录） → mac:<mac>
+//   3. record.id               → host:<id>
+//   4. ''                      → 调用方退化为内建的 MAC/IP 键
+//
+// `record` may be null (hosts still loading, or host_id resolved without a
+// matching address); `index` is only used to look the record up from the row's
+// address in that case, so callers that already resolved it can pass null.
+export function itemHostKey(item, record, index) {
+  const hostID = Number(item && item.host_id)
+  if (Number.isFinite(hostID) && hostID > 0) return `host:${hostID}`
+
+  if (!record && index) record = lookupHost(index, item && item.host)
+  const itemMac = normMAC(item && item.mac)
+  if (itemMac) return `mac:${itemMac}`
+
+  return hostRecordKey(record)
 }
 
 // subnetKey derives the level-1 grouping for one address.
@@ -118,14 +153,31 @@ export function subnetOf(ip) {
   return { key: 'other', label: '其它主机', rank: 8 }
 }
 
+// hostNodeTitle is the level-2 node label. The hostname is what people
+// recognise, so it wins over the address; the MAC follows in parentheses so a
+// user sees `路由器 (aa:bb:cc:dd:ee:ff)` instead of only an IP. Without a
+// hostname it falls back to vendor → MAC → first address. Views keep rendering
+// addrText next to it, so the addresses stay visible either way.
+export function hostNodeTitle(host) {
+  if (!host) return '?'
+  const name = String(host.hostname || '').trim()
+  const mac = String(host.mac || '').trim()
+  if (name) return mac ? `${name} (${mac})` : name
+  return host.vendor || mac || (host.ipList && host.ipList[0]) || host.ip || '?'
+}
+
 // groupBySubnet builds the two-level tree from a flat row list.
 //
 // options.hostKeyFor(item, record) is optional: a view that already knows how
 // to identify a host (e.g. by its own host-keyed cache) can pass it and the
-// returned non-empty string becomes the level-2 key. The built-in MAC/IP key is
-// used whenever it returns nothing, so existing callers are unaffected. Even
-// when a caller key is supplied a row is never split across two host nodes:
-// the first subnet assigned to that key wins for every later row.
+// returned non-empty string becomes the level-2 key. Ports/Rules pass
+// itemHostKey, which prefers the row's server-assigned `host_id` and therefore
+// works even when `record` is null (hosts[] still loading). The built-in
+// MAC/IP key is used whenever it returns nothing, so older callers are
+// unaffected. Even when a caller key is supplied a row is never split across
+// two host nodes: the first subnet assigned to that key wins for every later
+// row, so a dual-stack device's v4 and v6 rows share one node even when their
+// prefixes differ.
 export function groupBySubnet(items, index, getIP, getPort, options = {}) {
   const callerKey = typeof options.hostKeyFor === 'function' ? options.hostKeyFor : null
   const nets = new Map()
@@ -159,6 +211,11 @@ export function groupBySubnet(items, index, getIP, getPort, options = {}) {
     }
     let host = net.hosts.get(hostKey)
     if (!host) {
+      // Seed the node's identity from the hosts[] record when we have one,
+      // otherwise from the row itself: port/rule rows now join `mac` and
+      // `hostname`, so a host_id-only node (hosts not loaded yet) still shows
+      // the right name/MAC instead of a bare IP.
+      const seed = record || item || null
       host = {
         key: hostKey,
         // Primary address first: this is what the node title falls back to.
@@ -167,12 +224,17 @@ export function groupBySubnet(items, index, getIP, getPort, options = {}) {
         // Seed with every address the host record knows about, so a v4-only
         // row list still advertises the device's IPv6 address.
         ips: new Set(record ? hostAddresses(record) : []),
-        mac: record ? record.mac || '' : '',
-        hostname: record ? record.hostname || '' : '',
-        vendor: record ? record.vendor || '' : '',
+        mac: (seed && seed.mac) || '',
+        hostname: (seed && seed.hostname) || '',
+        vendor: (seed && seed.vendor) || '',
         items: [],
       }
       net.hosts.set(hostKey, host)
+    } else if (item) {
+      // Later rows of the same host carry the same join; fill gaps only, so a
+      // stale/empty hosts[] record cannot erase a name the rows do provide.
+      if (!host.mac && item.mac) host.mac = item.mac
+      if (!host.hostname && item.hostname) host.hostname = item.hostname
     }
     const rowIP = addrKey(ip)
     if (rowIP) host.ips.add(rowIP)
@@ -198,7 +260,7 @@ export function groupBySubnet(items, index, getIP, getPort, options = {}) {
       })
       h.ipList = all
       h.addrText = all.map((ip) => fmtHost(ip)).join(' · ')
-      h.title = h.hostname || h.vendor || h.mac || h.ipList[0] || '?'
+      h.title = hostNodeTitle(h)
       h.subtitle = h.addrText
     }
     // Bigger hosts first, then by title.

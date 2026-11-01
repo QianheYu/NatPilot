@@ -82,6 +82,11 @@ CREATE TABLE IF NOT EXISTS rules (
 	updated_at   TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_rules_host_port_proto ON rules(host, port, protocol);
+-- NOTE: this legacy index is intentionally kept. It still enforces uniqueness
+-- for rows whose address could not be resolved to a host row (host_id = 0). A
+-- dual-stack device may occupy two host_id = 0 rows (one per address family)
+-- until the host discovery backfill resolves them; once host_id is known the
+-- partial ux_rules_hostid_port_proto index in postBackfillMigrations takes over.
 CREATE INDEX IF NOT EXISTS ix_rules_enabled ON rules(enabled);
 CREATE INDEX IF NOT EXISTS ix_rules_source ON rules(source);
 
@@ -191,6 +196,9 @@ CREATE TABLE IF NOT EXISTS ports (
 	last_seen   TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ports_host_port_proto ON ports(host, port, protocol);
+-- NOTE: kept for the same reason as ux_rules_host_port_proto: host_id = 0 rows
+-- (address not yet resolved to a host) still need a uniqueness guarantee, and a
+-- dual-stack device may briefly occupy one such row per family.
 CREATE INDEX IF NOT EXISTS ix_ports_status ON ports(status);
 CREATE INDEX IF NOT EXISTS ix_ports_scan ON ports(scan_id);
 
@@ -307,6 +315,20 @@ func (s *Store) Migrate() error {
 			return fmt.Errorf("migration %q: %w", firstLine(stmt), err)
 		}
 	}
+	// Resolve the new identity columns before the indexes that depend on them
+	// exist: a database written by an older build can hold two rows for the same
+	// service (one per address family), and those have to collapse first.
+	if err := s.backfillHostIdentity(); err != nil {
+		return fmt.Errorf("backfill host identity: %w", err)
+	}
+	for _, stmt := range postBackfillMigrations {
+		if _, err := s.db.Exec(stmt); err != nil {
+			if isDuplicateColumn(err) {
+				continue
+			}
+			return fmt.Errorf("migration %q: %w", firstLine(stmt), err)
+		}
+	}
 	_, _ = s.db.Exec(`INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (1, ?)`, Now())
 	return nil
 }
@@ -347,6 +369,27 @@ var postMigrations = []string{
 	hostAddressIPIndexDDL,
 	hostAddressHostIndexDDL,
 	hostAddressSeedDDL,
+	// A port/rule is owned by a host row, not by one IP literal: a dual-stack
+	// device must not look like two hosts. These columns are added here (rather
+	// than in the CREATE TABLE above) because an existing database already has
+	// the tables; the backfill below resolves them.
+	`ALTER TABLE ports ADD COLUMN host_id INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE ports ADD COLUMN family TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE rules ADD COLUMN host_id INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE rules ADD COLUMN family TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS ix_ports_host_id ON ports(host_id)`,
+	`CREATE INDEX IF NOT EXISTS ix_rules_host_id ON rules(host_id)`,
+}
+
+// postBackfillMigrations run after backfillHostIdentity has resolved host_id and
+// collapsed rows that now point at the same host+port+protocol. They cannot run
+// earlier: the partial unique indexes would reject the still-unresolved
+// duplicates and abort the whole migration.
+var postBackfillMigrations = []string{
+	// One row per host+port+protocol. The partial index leaves host_id = 0 rows
+	// to the legacy (host, port, protocol) index: see the note in schema.
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_ports_hostid_port_proto ON ports(host_id, port, protocol) WHERE host_id > 0`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_rules_hostid_port_proto ON rules(host_id, port, protocol) WHERE host_id > 0`,
 }
 
 func isDuplicateColumn(err error) bool {

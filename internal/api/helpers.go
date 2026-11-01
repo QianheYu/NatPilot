@@ -49,13 +49,19 @@ func storeRuleFilter(q url.Values) store.RuleFilter {
 	return f
 }
 
-// portStatusFilterFor resolves the discovered-port filter for a rule.
+// portStatusFilterFor resolves the discovered-port filter for a rule. When the
+// rule is attached to a host row the lookup is by that identity, so a port seen
+// over the other address family still counts as the same service.
 func portStatusFilterFor(r model.Rule) store.PortStatusFilter {
-	return store.PortStatusFilter{
+	f := store.PortStatusFilter{
 		Host:  r.Host,
 		Query: strconv.Itoa(r.Port),
 		Limit: 5,
 	}
+	if r.HostID > 0 {
+		f.HostID = r.HostID
+	}
+	return f
 }
 
 // guessService maps a port to its well known service name.

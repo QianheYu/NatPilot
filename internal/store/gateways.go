@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 
 	"github.com/ekko-studio/natpilot/internal/model"
 )
@@ -218,12 +219,17 @@ func (s *Store) UpsertHost(h *model.Host) error {
 
 	if found {
 		// Same hardware, possibly a new address: keep the row and its id. An
-		// observation without a MAC must not erase the MAC learned earlier.
+		// observation without a MAC must not erase the MAC learned earlier, and
+		// an empty hostname/note/tags must not erase a user-set identity either
+		// (PATCH /api/hosts/{id} writes those and discovery runs afterwards).
 		_, err = tx.Exec(`UPDATE hosts SET mac=CASE WHEN ? <> '' THEN ? ELSE mac END,
-			hostname=?, vendor=?, kind=?, iface=?, is_local=?, seen_count=?,
-			open_ports=?, tags=?, note=?, last_seen=?, source=? WHERE id=?`,
-			mac, mac, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1,
-			h.OpenPorts, h.Tags, h.Note, now, h.Source, id)
+			hostname=CASE WHEN ? <> '' THEN ? ELSE hostname END,
+			vendor=?, kind=?, iface=?, is_local=?, seen_count=?, open_ports=?,
+			tags=CASE WHEN ? <> '[]' THEN ? ELSE tags END,
+			note=CASE WHEN ? <> '' THEN ? ELSE note END,
+			last_seen=?, source=? WHERE id=?`,
+			mac, mac, h.Hostname, h.Hostname, h.Vendor, h.Kind, h.Interface, b2i(h.IsLocal), seen+1,
+			h.OpenPorts, h.Tags, h.Tags, h.Note, h.Note, now, h.Source, id)
 		if err != nil {
 			return err
 		}
@@ -367,6 +373,27 @@ func (s *Store) GetHostByID(id int64) (*model.Host, error) {
 		return nil, err
 	}
 	return h, nil
+}
+
+// SetHostIdentity writes the user-corrected identity of a host.
+//
+// Discovery only fills a hostname when the row has none, so a name set here is
+// never replaced by a later reverse-DNS result, and UpsertHost keeps an empty
+// observation from erasing it. MAC is deliberately not editable: it is the
+// stable key host-bound policies follow.
+func (s *Store) SetHostIdentity(id int64, hostname, note string, tags []string) error {
+	if tags == nil {
+		tags = []string{}
+	}
+	res, err := s.db.Exec(`UPDATE hosts SET hostname=?, note=?, tags=? WHERE id=?`,
+		strings.TrimSpace(hostname), note, model.StringList(tags), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // DeleteHost removes a host observation and every address recorded for it.
