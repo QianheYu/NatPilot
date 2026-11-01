@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -198,13 +199,20 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts, "total": len(hosts)})
 }
 
-// handleHostScan discovers hosts, optionally by sweeping one subnet on one
-// interface.
+// handleHostScan discovers hosts on the LAN. The request body is optional:
 //
-//	{}								read the OS neighbour table (fast, passive)
-//	{"iface":"以太网"}					same, filtered to that interface
-//	{"cidr":"192.168.1.0/24","iface":"以太网"}	active TCP sweep bound to the
-//										chosen interface, then MAC enrichment from ARP
+//	{}                                             passive: read the OS neighbour table
+//	{"iface":"以太网"}                              passive, filtered to one interface
+//	{"mode":"passive","iface":"WLAN"}               same, explicitly requested
+//	{"iface":"WLAN|fe80::1%12"}                     active sweep of that interface's subnet
+//	{"mode":"subnet","iface":"WLAN|fe80::1%12"}     same, explicitly requested
+//	{"cidr":"192.168.1.0/24","iface":"以太网"}       active sweep of an explicit subnet
+//	{"mode":"cidr","cidr":"192.168.1.0/24"}         active sweep, cidr required
+//
+// Resolution order: mode "passive", then a non-empty cidr (or mode "cidr"),
+// then the selected interface's own subnet, then the passive neighbour pass.
+// Leaving cidr empty while selecting an interface therefore sweeps that
+// interface's subnet; omitting both keeps the old passive behaviour.
 //
 // Passive discovery can only see peers the OS already talked to; the active
 // sweep is what makes "scan this subnet on this NIC" work, and it also forces the
@@ -213,6 +221,7 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		CIDR      string `json:"cidr"`
 		Iface     string `json:"iface"`
+		Mode      string `json:"mode"`
 		Ports     string `json:"ports"`
 		TimeoutMS int    `json:"timeout_ms"`
 		MaxHosts  int    `json:"max_hosts"`
@@ -233,28 +242,43 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 		ifaceName = chosen.Name
 	}
 
+	kind, cidrOut, err := resolveScanMode(req.CIDR, req.Iface, req.Mode, chosen, hasIface)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	added := 0
 	discovered := []map[string]any{}
 
-	if cidr := strings.TrimSpace(req.CIDR); cidr != "" {
+	if kind != scanModePassive {
 		ports, perr := scanner.ParseProbePorts(req.Ports)
 		if perr != nil {
 			writeError(w, http.StatusBadRequest, perr.Error())
 			return
 		}
 		probe := scanner.HostProbe{
-			CIDR:     cidr,
+			CIDR:     cidrOut,
 			Ports:    ports,
 			MaxHosts: req.MaxHosts,
 		}
 		if hasIface {
 			// 绑定源地址就等于选定网卡：多网卡机器上不会走到默认路由那块网卡。
-			probe.SourceIP = chosen.IP
+			// 目标子网属于另一个地址族时不绑定，否则每次连接都会在 bind 阶段失败。
+			if bindSourceFamily(chosen, cidrOut) {
+				probe.SourceIP = chosen.IP
+			}
+			if chosen.IsV6() {
+				// fe80::/64 子网的目标地址和源地址都需要 scope id 才能拨通。
+				// 全局 IPv6 的 Zone 为空，赋值是无害的空操作。
+				probe.SourceZone = chosen.Zone
+				probe.TargetZone = chosen.Zone
+			}
 		}
 		if req.TimeoutMS > 0 {
 			probe.Timeout = time.Duration(req.TimeoutMS) * time.Millisecond
 		}
-		alive, err := scanner.ProbeCIDR(r.Context(), probe)
+		alive, skipped, err := scanner.ProbeCIDR(r.Context(), probe)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -288,10 +312,11 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		s.app.Bus.PublishType("hosts", map[string]any{"count": added})
-		s.audit(r, "host.discover", fmt.Sprintf("scan %s on %s: %d alive", cidr, orDefault(ifaceName, "any"), len(alive)), "", true)
+		s.audit(r, "host.discover", fmt.Sprintf("%s %s on %s: %d alive, %d skipped",
+			kind, cidrOut, orDefault(ifaceName, "any"), len(alive), skipped), "", true)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": true, "discovered": added, "alive": len(alive),
-			"cidr": cidr, "iface": ifaceName, "hosts": discovered,
+			"ok": true, "mode": kind, "discovered": added, "alive": len(alive),
+			"cidr": cidrOut, "iface": ifaceName, "skipped": skipped, "hosts": discovered,
 		})
 		return
 	}
@@ -323,8 +348,84 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 	s.app.Bus.PublishType("hosts", map[string]any{"count": added})
 	s.audit(r, "host.discover", fmt.Sprintf("%d peers", added), "", true)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "discovered": added, "iface": ifaceName, "hosts": discovered,
+		"ok": true, "mode": scanModePassive, "discovered": added, "alive": 0,
+		"cidr": "", "iface": ifaceName, "skipped": 0, "hosts": discovered,
 	})
+}
+
+// Scan modes reported in the host-scan response and accepted in the request.
+const (
+	scanModePassive = "passive"
+	scanModeSubnet  = "subnet"
+	scanModeCIDR    = "cidr"
+)
+
+// resolveScanMode turns the user's (cidr, iface, mode) triple into the scan to
+// run. It is pure so the whole matrix can be table-tested without a network.
+//
+// Rules, in order:
+//   - mode "passive" always wins and ignores cidr/iface.
+//   - a non-empty cidr (or mode "cidr") sweeps that cidr; mode "cidr" without
+//     one is an error.
+//   - cidr empty with an interface (or mode "subnet") sweeps the interface's
+//     own subnet, taken from Network and falling back to IPNet.
+//   - nothing given falls back to the passive neighbour pass.
+//
+// kind is one of scanModePassive, scanModeSubnet or scanModeCIDR. Errors are
+// meant to be returned to the caller as HTTP 400.
+func resolveScanMode(cidr, iface, mode string, ifc netutil.Iface, hasIface bool) (kind, cidrOut string, err error) {
+	cidr = strings.TrimSpace(cidr)
+	iface = strings.TrimSpace(iface)
+	mode = strings.ToLower(strings.TrimSpace(mode))
+
+	switch mode {
+	case "", "auto", scanModePassive, scanModeSubnet, scanModeCIDR:
+	default:
+		return "", "", fmt.Errorf("invalid mode %q (want auto, passive, subnet or cidr)", mode)
+	}
+	if iface != "" && !hasIface {
+		return "", "", fmt.Errorf("interface %q not found", iface)
+	}
+	if mode == scanModePassive {
+		return scanModePassive, "", nil
+	}
+	if cidr != "" {
+		return scanModeCIDR, cidr, nil
+	}
+	if mode == scanModeCIDR {
+		return "", "", fmt.Errorf("mode %q requires a cidr", scanModeCIDR)
+	}
+	if hasIface {
+		subnet := strings.TrimSpace(ifc.Network)
+		if subnet == "" {
+			subnet = strings.TrimSpace(ifc.IPNet)
+		}
+		name := orDefault(ifc.Name, iface)
+		if subnet == "" {
+			return "", "", fmt.Errorf("interface %q has no usable subnet (both network and ip_net are empty)", name)
+		}
+		if _, _, perr := net.ParseCIDR(subnet); perr != nil {
+			return "", "", fmt.Errorf("interface %q has an invalid subnet %q", name, subnet)
+		}
+		return scanModeSubnet, subnet, nil
+	}
+	if mode == scanModeSubnet {
+		return "", "", fmt.Errorf("mode %q requires an interface", scanModeSubnet)
+	}
+	return scanModePassive, "", nil
+}
+
+// bindSourceFamily reports whether ifc can source a sweep of cidr. A CIDR of the
+// other address family is left unbound (the OS chooses the source) instead of
+// pinning a source address whose family does not match the destination, which
+// would make every connect attempt fail at bind time. An unparseable CIDR is
+// handled by ProbeCIDR, which reports it.
+func bindSourceFamily(ifc netutil.Iface, cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	return (ip.To4() == nil) == ifc.IsV6()
 }
 
 func hostname() string {

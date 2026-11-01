@@ -8,7 +8,7 @@ import PolicyFields from '../components/PolicyFields.vue'
 import Switch from '../components/Switch.vue'
 import { toastOk, toastErr, toastWarn, canWrite } from '../store'
 import { fmtRelative, portStatusInfo, protocolTag, truncate } from '../utils/format'
-import { fmtHost, fmtHostPort } from '../utils/netaddr'
+import { addrFamily, fmtHost, fmtHostPort } from '../utils/netaddr'
 
 const loading = ref(true)
 const hosts = ref([])
@@ -168,46 +168,144 @@ function familyBadge(family) {
   return ''
 }
 
+// 接口条目的地址族标签：老版本响应可能没有 family，按 IP 反推。
+function ifaceFamily(i) {
+  if (!i) return ''
+  return familyBadge(i.family) || familyBadge(addrFamily(i.ip))
+}
+
 // ---- 扫描主机（指定网段 / 网卡）----
 const hostScanOpen = ref(false)
 const hostScanBusy = ref(false)
 const hostScanResult = ref(null)
+// cidr 是可选项：留空表示「扫所选网卡所在网段」，由后端按 iface 计算。
+// iface 存复合值 "<name>|<ip>"：同一块网卡现在有 IPv4 / IPv6 两个条目，
+// 只用名字会永远选中 IPv4 那条。
 const hostScanForm = reactive({ iface: '', cidr: '', ports: '80,443,22,445,3389', timeout_ms: 400 })
-// 回环网卡不提供：扫自己没有意义，还会把 127.0.0.0/8 当成局域网。
-const scanIfaces = computed(() => (interfaces.value || []).filter((i) => !i.loopback && i.up))
-function ifaceSubnet(name) {
-  const i = (interfaces.value || []).find((x) => x.name === name)
-  return i ? i.ip_net || '' : ''
+
+// ifaceKey 是网卡下拉里每个条目的唯一值。
+function ifaceKey(i) {
+  return `${i.name}|${i.ip}`
 }
+
+// 回环网卡不提供：扫自己没有意义，还会把 127.0.0.0/8、::1 当成局域网。
+// 同一 (name, ip) 只保留一条，避免接口列表重复上报同一地址时出现重复选项。
+const scanIfaces = computed(() => {
+  const out = []
+  const seen = new Set()
+  for (const i of interfaces.value || []) {
+    if (i.loopback || !i.up) continue
+    const key = ifaceKey(i)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(i)
+  }
+  return out
+})
+
+const scanIface = computed(
+  () => scanIfaces.value.find((i) => ifaceKey(i) === hostScanForm.iface) || null,
+)
+
+// 网卡自带的网段。IPv6 必须优先 network（真实网段，如 fdfe:dcba:9876::/126），
+// ip_net 是「地址/前缀」（fdfe:dcba:9876::1/126），直接拿去扫是错的。
+function ifaceDefaultCidr(i) {
+  if (!i) return ''
+  return String(i.network || i.ip_net || '').trim()
+}
+
+// 「用网卡网段」按钮恢复的默认值。
+const scanIfaceCidr = computed(() => ifaceDefaultCidr(scanIface.value))
+
+// 按当前选择算出「将扫描什么」，让用户按开始前就能看到结果。
+const scanTarget = computed(() => {
+  const cidr = hostScanForm.cidr.trim()
+  const i = scanIface.value
+  if (cidr) return { cidr, label: `将扫描 ${cidr}${i ? `（${i.name}）` : '（手填网段）'}` }
+  if (!i) return { cidr: '', label: '尚未选择网卡，也没有填写网段' }
+  const def = ifaceDefaultCidr(i)
+  return {
+    cidr: def,
+    label: def
+      ? `将扫描 ${def}（${i.name} 所在网段）`
+      : `将扫描所选网卡 ${i.name} 所在网段（由后端按网卡计算）`,
+  }
+})
+
 function openHostScan() {
   hostScanResult.value = null
-  if (!hostScanForm.iface && scanIfaces.value.length) {
-    hostScanForm.iface = scanIfaces.value[0].name
-    hostScanForm.cidr = ifaceSubnet(hostScanForm.iface)
+  // 首次打开、或接口列表变化导致旧选择失效时，默认选第一块可用网卡并带出网段。
+  // 之后不再覆盖用户已填的网段（用户可能故意清空它）。
+  if (!scanIfaces.value.some((i) => ifaceKey(i) === hostScanForm.iface)) {
+    const first = scanIfaces.value[0] || null
+    hostScanForm.iface = first ? ifaceKey(first) : ''
+    hostScanForm.cidr = ifaceDefaultCidr(first)
   }
   hostScanOpen.value = true
 }
-function pickScanIface(name) {
-  hostScanForm.iface = name
-  // 换网卡时把网段跟着换成该网卡的子网，避免"扫 A 网卡却用 B 网段"。
-  const sub = ifaceSubnet(name)
-  if (sub) hostScanForm.cidr = sub
+
+function pickScanIface(value) {
+  hostScanForm.iface = value
+  // 换网卡时把网段跟着换成该网卡的子网，避免「扫 A 网卡却用 B 网段」。
+  // 这只是默认值：填入后仍可手动清空，留空即交给后端按网卡计算。
+  const i = scanIfaces.value.find((x) => ifaceKey(x) === value)
+  if (!i) return // 「默认路由」：保留用户手填的网段
+  hostScanForm.cidr = ifaceDefaultCidr(i)
 }
-async function runHostScan() {
-  if (!hostScanForm.cidr.trim()) {
-    toastErr('请填写要扫描的网段，例如 192.168.1.0/24', '缺少网段')
+
+function useIfaceSubnet() {
+  if (!scanIface.value) {
+    toastErr('请先选择网卡', '没有可用的网段')
     return
   }
+  hostScanForm.cidr = scanIfaceCidr.value
+  if (!hostScanForm.cidr) {
+    toastWarn('所选网卡没有上报网段，留空时由后端按网卡计算', '网段未知')
+  }
+}
+
+// 响应里的 iface 可能是复合值 "<name>|<ip>"，展示时只保留网卡名。
+function ifaceName(value) {
+  const s = String(value || '').trim()
+  if (!s) return ''
+  const idx = s.indexOf('|')
+  return idx >= 0 ? s.slice(0, idx) : s
+}
+
+// scanDoneMessage 用响应回显的 mode/cidr 描述「实际扫了什么」，而不是复述表单。
+function scanDoneMessage(res, sentMode, sentCidr) {
+  const r = res || {}
+  const subnet = String(r.cidr || sentCidr || '').trim()
+  const mode = r.mode || sentMode
+  const scanned = subnet ? `扫描 ${subnet}` : mode === 'subnet' ? '扫描所选网卡网段' : '扫描'
+  let msg = `${scanned} 完成：${r.alive || 0} 台在线，新增/更新 ${r.discovered || 0} 条记录`
+  const skipped = Number(r.skipped) || 0
+  if (skipped > 0) msg += `（已跳过 ${skipped} 个无 zone 的链路本地地址）`
+  return msg
+}
+
+async function runHostScan() {
+  const cidr = hostScanForm.cidr.trim()
+  const iface = hostScanForm.iface
+  // 网段可选，但「网段 + 网卡」全空时后端只能返回 400，这里提前说清楚。
+  if (!cidr && !iface) {
+    toastErr('请选择网卡，或填写要扫描的网段，例如 192.168.1.0/24', '缺少扫描目标')
+    return
+  }
+  // 手填网段 = 扫该网段；留空 = 扫所选网卡所在网段；两者都没有才退化为 cidr。
+  const mode = cidr ? 'cidr' : iface ? 'subnet' : 'cidr'
   hostScanBusy.value = true
   try {
-    const res = await api.hostScan({
-      cidr: hostScanForm.cidr.trim(),
-      iface: hostScanForm.iface,
+    const payload = {
+      mode,
+      iface,
       ports: hostScanForm.ports,
       timeout_ms: Number(hostScanForm.timeout_ms) || 400,
-    })
+    }
+    if (cidr) payload.cidr = cidr
+    const res = await api.hostScan(payload)
     hostScanResult.value = res
-    toastOk(`${hostScanForm.cidr} 扫描完成：${res.alive} 台在线，新增/更新 ${res.discovered} 条记录`)
+    toastOk(scanDoneMessage(res, mode, cidr))
     await load()
   } catch (err) {
     toastErr(err.message, '扫描主机失败')
@@ -580,24 +678,45 @@ onBeforeUnmount(clearPoll)
       </div>
     </div>
 
-    <!-- 扫描所选主机 -->
-    <Modal v-if="hostScanOpen" title="扫描主机（指定网段 / 网卡）" wide @close="hostScanOpen = false">
+    <!-- 扫描主机：网段可选，留空即扫所选网卡所在网段 -->
+    <Modal v-if="hostScanOpen" title="扫描主机（网段可选 / 指定网卡）" wide @close="hostScanOpen = false">
       <div class="grid cols-2">
         <label class="field">
           <span>网卡</span>
           <select class="select" :value="hostScanForm.iface" @change="pickScanIface($event.target.value)">
             <option value="">默认路由（不绑定网卡）</option>
-            <option v-for="i in scanIfaces" :key="i.name + i.ip" :value="i.name">
-              {{ i.name }} · {{ fmtHost(i.ip) }}<template v-if="familyBadge(i.family)"> · {{ familyBadge(i.family) }}</template><template v-if="i.gateway"> · 网关 {{ fmtHost(i.gateway) }}</template>
+            <option v-for="i in scanIfaces" :key="ifaceKey(i)" :value="ifaceKey(i)">
+              {{ i.name }} · {{ fmtHost(i.ip) }}<template v-if="ifaceFamily(i)"> · {{ ifaceFamily(i) }}</template><template v-if="i.gateway"> · 网关 {{ fmtHost(i.gateway) }}</template>
             </option>
           </select>
           <div class="hint">选中网卡后，探测报文会绑定该网卡的地址发出，多网卡机器不会走错链路。</div>
+          <div class="hint">IPv6 链路本地地址（fe80::/10）会使用该网卡的 zone 扫描。</div>
         </label>
         <label class="field">
-          <span>网段（CIDR）</span>
-          <input v-model="hostScanForm.cidr" class="input mono" placeholder="192.168.1.0/24" />
+          <span>网段（CIDR，可选）</span>
+          <div class="row" style="gap: 8px; align-items: center">
+            <input
+              v-model="hostScanForm.cidr"
+              class="input mono"
+              style="flex: 1 1 auto"
+              placeholder="留空 = 扫描所选网卡所在网段"
+            />
+            <button
+              class="btn sm"
+              type="button"
+              :disabled="!scanIface"
+              :title="scanIfaceCidr ? `填入 ${scanIfaceCidr}` : '所用网卡没有上报网段'"
+              @click="useIfaceSubnet"
+            >
+              用网卡网段
+            </button>
+          </div>
           <div class="hint">
-            默认带出所选网卡的子网；也可手动填其它网段（最多解析 1024 个地址）。
+            留空时由后端按所选网卡计算网段；也可手动填其它网段（最多解析 1024 个地址），填入后以这里的值为准。
+          </div>
+          <div class="hint">
+            <span class="badge accent" v-if="!hostScanForm.cidr.trim() && scanIface">自动</span>
+            {{ scanTarget.label }}
           </div>
         </label>
         <label class="field">
@@ -621,7 +740,7 @@ onBeforeUnmount(clearPoll)
               <td class="mono small">{{ h.ip }}</td>
               <td class="mono small">{{ h.mac || '—' }}</td>
               <td class="small">{{ h.hostname || '—' }}</td>
-              <td class="small mute">{{ h.iface || hostScanResult.iface || '—' }}</td>
+              <td class="small mute">{{ ifaceName(h.iface || hostScanResult.iface) || '—' }}</td>
             </tr>
             <tr v-if="!hostScanResult.hosts || !hostScanResult.hosts.length">
               <td colspan="4" class="dim small">该网段没有主机响应所选端口（可尝试换端口或加大超时）。</td>
@@ -630,7 +749,9 @@ onBeforeUnmount(clearPoll)
         </table>
       </div>
       <div v-if="hostScanResult" class="small dim" style="margin-top: 8px">
-        在线 {{ hostScanResult.alive }} 台 · 写入/更新 {{ hostScanResult.discovered }} 条
+        扫描方式 {{ hostScanResult.mode === 'subnet' ? '所选网卡网段' : '指定网段' }}<template v-if="hostScanResult.cidr"> · 目标 <span class="mono">{{ hostScanResult.cidr }}</span></template>
+        · 在线 {{ hostScanResult.alive }} 台 · 写入/更新 {{ hostScanResult.discovered }} 条
+        <span v-if="Number(hostScanResult.skipped) > 0"> · 已跳过 {{ hostScanResult.skipped }} 个无 zone 的链路本地地址</span>
       </div>
 
       <template #footer>
