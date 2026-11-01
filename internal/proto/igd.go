@@ -147,12 +147,12 @@ func (c *IGDClient) soapAction(ctx context.Context, action string, args [][2]str
 	text := string(b)
 	if resp.StatusCode >= 400 {
 		if code, desc := parseUPnPError(text); code != "" {
-			return "", fmt.Errorf("upnp error %s: %s", code, desc)
+			return "", upnpError(action, code, desc)
 		}
 		return "", fmt.Errorf("soap %s: http %d", action, resp.StatusCode)
 	}
 	if code, desc := parseUPnPError(text); code != "" {
-		return "", fmt.Errorf("upnp error %s: %s", code, desc)
+		return "", upnpError(action, code, desc)
 	}
 	return text, nil
 }
@@ -161,6 +161,30 @@ func xmlEscape(s string) string {
 	var b bytes.Buffer
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
+}
+
+// upnpError turns a SOAP fault into an error with an actionable hint for the codes
+// that operators actually hit. The raw code stays first so logs remain greppable.
+func upnpError(action, code, desc string) error {
+	msg := fmt.Sprintf("upnp error %s: %s", code, desc)
+	switch code {
+	case "606": // Action not authorized
+		msg += "；路由器拒绝了该动作，常见原因：" +
+			"① 网关启用了 secure mode / UPnP 访问控制，只允许把端口映射到『发起请求的本机 IP』；" +
+			"② 该内网客户端地址不在网关的授权列表内；" +
+			"③ 请求的端口超出网关允许的范围（很多固件禁用 1024 以下端口）；" +
+			"④ 该网关只接受注册过的客户端。请在路由器 UPnP 设置里放开对本机的授权，" +
+			"并把规则目标改为本机 IP、外部端口换成 1024 以上后重试"
+	case "718": // ConflictInMappingEntry
+		msg += "；该外部端口已被其它映射占用，换一个外部端口或先删除冲突项"
+	case "724": // SamePortValuesRequired
+		msg += "；该网关要求内外网端口一致，请把外部端口留空或设为与内网端口相同"
+	case "725": // OnlyPermanentLeasesSupported
+		msg += "；该网关只支持永久租约，请把租约设为 0（永久）"
+	case "501": // ActionFailed
+		msg += "；网关执行失败，可能是端口被占用或网关临时错误"
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 func parseUPnPError(body string) (string, string) {

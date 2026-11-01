@@ -52,7 +52,12 @@ function changedKeys() {
 // 鉴权开关不能因为"当前免登录"就被禁用——否则一旦关了鉴权就再也打不开，
 // 形成死锁。规则改成单向：打开随时可以；关闭是降权操作，要求当前会话已认证。
 const authCurrentlyOn = computed(() => !!(cfg.value.auth && cfg.value.auth.enabled))
-const authToggleDisabled = computed(() => authCurrentlyOn.value && !store.identity.authenticated)
+// 桌面模式（单机、绑回环）本身就是免登录部署，鉴权开关在这里没有意义，直接禁用；
+// server / web 模式则必须可操作，否则一关就再也打不开（死锁）。
+const desktopMode = computed(() => store.meta.mode === 'desktop')
+const authToggleDisabled = computed(
+  () => desktopMode.value || (authCurrentlyOn.value && !store.identity.authenticated),
+)
 
 async function clearOverride(key) {
   try {
@@ -257,7 +262,8 @@ onMounted(load)
             <Switch v-model="draft['auth.enabled']" :disabled="authToggleDisabled" />
             <span class="small dim">
               启用登录鉴权（web / 服务端部署建议开启；桌面模式免登录）
-              <template v-if="authToggleDisabled">· 关闭鉴权属于降权操作，需先以管理员登录</template>
+              <template v-if="desktopMode">· 桌面模式为单机免登录部署，不支持开启登录鉴权</template>
+              <template v-else-if="authToggleDisabled">· 关闭鉴权属于降权操作，需先以管理员登录</template>
               <template v-else-if="!authCurrentlyOn">· 当前免登录，可以直接打开</template>
             </span>
             <span
