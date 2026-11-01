@@ -1069,3 +1069,21 @@ table.data .cell-actions .btn.ghost.danger {
   overflow: visible;
   text-overflow: clip;
 }
+
+/* ---- 工具栏按钮尺寸统一 ----
+   批量操作按钮历史上用了 .btn.sm（28px），与旁边的 .btn（34px）并排时明显
+   小一号。工具栏是一个视觉组，尺寸必须一致；表格行内的 .btn.sm 仍保持紧凑。 */
+.toolbar .btn:not(.icon),
+.toolbar .btn.sm:not(.icon) {
+  height: 34px;
+  padding: 0 13px;
+  font-size: 13px;
+}
+
+/* ---- 行内 label.field 不再带下边距 ----
+   label.field 默认 margin-bottom:12px；放进 .row（flex + align-items:flex-end）
+   时会把自己顶高 12px，导致同一行的输入框与按钮上下错位。
+   行内布局下由行本身控制间距，这里清零。 */
+.row > label.field {
+  margin-bottom: 0;
+}
