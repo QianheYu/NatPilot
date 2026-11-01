@@ -368,8 +368,33 @@ make docker                       # natpilot:0.1.0 + natpilot:latest
 docker build -t natpilot:dev .    # 等价
 ```
 
-Dockerfile 是三阶段构建（node 构建前端 → golang 编译并内嵌 → alpine 运行时，
-非 root），镜像里不需要 Node/Go/gcc。
+Dockerfile 是三阶段构建（node 构建前端 → golang 编译并内嵌 → alpine 运行时），
+镜像里不需要 Node/Go/gcc。
+
+**容器以 root 运行**（镜像内不创建额外用户/组）。这是刻意的：绑定挂载宿主目录时，
+容器内 uid 与宿主属主不一致会导致 SQLite 打不开库文件：
+
+```
+error: ping sqlite: unable to open database file (14)     # SQLITE_CANTOPEN
+```
+
+需要非 root 运行时显式覆盖，并保证该 uid 对数据目录可写：
+
+```bash
+# 1) 先把宿主目录交给目标 uid
+sudo chown -R 1000:1000 ./data
+# 2) 用该 uid 启动
+docker run -v "$PWD/data:/var/lib/natpilot" --user 1000:1000 natpilot:latest
+```
+
+也可以直接用命名卷，让 Docker 管理属主，完全避开这个问题：
+
+```yaml
+volumes:
+  - natpilot-data:/var/lib/natpilot
+volumes:
+  natpilot-data:
+```
 
 **网络模式决定能不能发现网关**：UPnP/PCP 发现依赖组播，bridge 网络下容器通常收不到，
 表现为"服务正常但永远发现不到网关"。需要自动发现时用：

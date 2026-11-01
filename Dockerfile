@@ -4,7 +4,7 @@
 #
 #   1. frontend  -> builds the Vue SPA with vite
 #   2. backend   -> compiles the Go server with the SPA embedded
-#   3. runtime   -> minimal alpine image running as a non-root user
+#   3. runtime   -> minimal alpine image (runs as root by design, see below)
 #
 # Cross-compilation strategy:
 #   The frontend and backend stages run on the *build* platform
@@ -71,11 +71,13 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \
 # No --platform here: this stage must be the *target* architecture.
 FROM alpine:3.20
 # No sqlite-libs: the SQLite engine is compiled into the binary.
-RUN apk add --no-cache ca-certificates tzdata iproute2 wget \
- && addgroup -S natpilot && adduser -S -G natpilot -h /var/lib/natpilot natpilot
+RUN apk add --no-cache ca-certificates tzdata iproute2 wget
 COPY --from=backend /out/natpilot /usr/local/bin/natpilot
-RUN mkdir -p /var/lib/natpilot && chown natpilot:natpilot /var/lib/natpilot
-USER natpilot
+# 不创建额外的用户与组，容器默认以 root 运行：
+# 这样绑定挂载宿主目录时不会因容器内 uid 与宿主属主不一致而出现
+# SQLITE_CANTOPEN (14)。需要非 root 运行时用 `docker run --user <uid>:<gid>`
+# 覆盖即可，前提是该 uid 对 /var/lib/natpilot 有写权限。
+RUN mkdir -p /var/lib/natpilot
 ENV NATPILOT_DATA_DIR=/var/lib/natpilot \
     NATPILOT_HOST=0.0.0.0 \
     NATPILOT_PORT=8787 \
