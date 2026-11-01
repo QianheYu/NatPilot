@@ -147,7 +147,7 @@ export const api = {
 
   // hosts & network
   hosts: (query) => get('/api/hosts', query),
-  hostScan: () => post('/api/hosts/scan', {}),
+  hostScan: (body) => post('/api/hosts/scan', body || {}),
   deleteHost: (id) => del(`/api/hosts/${id}`),
   // Per-host monitoring: policies bound to the host's MAC (DHCP-safe).
   hostPolicies: (id) => get(`/api/hosts/${id}/policies`),

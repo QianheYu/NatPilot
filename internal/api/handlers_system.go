@@ -15,6 +15,7 @@ import (
 	"github.com/ekko-studio/natpilot/internal/logging"
 	"github.com/ekko-studio/natpilot/internal/model"
 	"github.com/ekko-studio/natpilot/internal/netutil"
+	"github.com/ekko-studio/natpilot/internal/scanner"
 	"github.com/ekko-studio/natpilot/internal/store"
 )
 
@@ -197,12 +198,109 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts, "total": len(hosts)})
 }
 
+// handleHostScan discovers hosts, optionally by sweeping one subnet on one
+// interface.
+//
+//	{}								read the OS neighbour table (fast, passive)
+//	{"iface":"以太网"}					same, filtered to that interface
+//	{"cidr":"192.168.1.0/24","iface":"以太网"}	active TCP sweep bound to the
+//										chosen interface, then MAC enrichment from ARP
+//
+// Passive discovery can only see peers the OS already talked to; the active
+// sweep is what makes "scan this subnet on this NIC" work, and it also forces the
+// ARP entries that give each host its MAC (host-bound policies key on the MAC).
 func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CIDR      string `json:"cidr"`
+		Iface     string `json:"iface"`
+		Ports     string `json:"ports"`
+		TimeoutMS int    `json:"timeout_ms"`
+		MaxHosts  int    `json:"max_hosts"`
+	}
+	// An empty body keeps the old "discover what the OS already knows" behaviour.
+	_ = decodeJSONLoose(r, &req)
+
 	ifaces, _ := netutil.Interfaces()
-	neighbors, _ := netutil.DiscoverNeighbors(r.Context())
 	local, _ := netutil.LocalAddresses()
+
+	chosen, hasIface := scanner.PickInterface(ifaces, req.Iface)
+	if strings.TrimSpace(req.Iface) != "" && !hasIface {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("未找到网卡 %q", req.Iface))
+		return
+	}
+	ifaceName := ""
+	if hasIface {
+		ifaceName = chosen.Name
+	}
+
 	added := 0
+	discovered := []map[string]any{}
+
+	if cidr := strings.TrimSpace(req.CIDR); cidr != "" {
+		ports, perr := scanner.ParseProbePorts(req.Ports)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, perr.Error())
+			return
+		}
+		probe := scanner.HostProbe{
+			CIDR:     cidr,
+			Ports:    ports,
+			MaxHosts: req.MaxHosts,
+		}
+		if hasIface {
+			// 绑定源地址就等于选定网卡：多网卡机器上不会走到默认路由那块网卡。
+			probe.SourceIP = chosen.IP
+		}
+		if req.TimeoutMS > 0 {
+			probe.Timeout = time.Duration(req.TimeoutMS) * time.Millisecond
+		}
+		alive, err := scanner.ProbeCIDR(r.Context(), probe)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// 主动探测会把应答方的 ARP 表项刷新出来，用来补 MAC/厂商。
+		macOf := map[string]netutil.Neighbor{}
+		if neighbors, nerr := netutil.DiscoverNeighbors(r.Context()); nerr == nil {
+			for _, n := range neighbors {
+				macOf[n.IP] = n
+			}
+		}
+		for _, ip := range alive {
+			h := &model.Host{
+				IP: ip, IsLocal: local[ip], Kind: classifyHost(ip, ifaces),
+				Source: "scan", Interface: ifaceName,
+			}
+			if n, ok := macOf[ip]; ok {
+				h.MAC = n.MAC
+				h.Vendor = n.Vendor
+				if h.Interface == "" {
+					h.Interface = n.Iface
+				}
+			}
+			h.Hostname = netutil.ReverseDNS(r.Context(), ip)
+			if err := s.app.Store.UpsertHost(h); err == nil {
+				added++
+			}
+			discovered = append(discovered, map[string]any{
+				"ip": h.IP, "mac": h.MAC, "vendor": h.Vendor,
+				"hostname": h.Hostname, "iface": h.Interface, "is_local": h.IsLocal,
+			})
+		}
+		s.app.Bus.PublishType("hosts", map[string]any{"count": added})
+		s.audit(r, "host.discover", fmt.Sprintf("scan %s on %s: %d alive", cidr, orDefault(ifaceName, "any"), len(alive)), "", true)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "discovered": added, "alive": len(alive),
+			"cidr": cidr, "iface": ifaceName, "hosts": discovered,
+		})
+		return
+	}
+
+	neighbors, _ := netutil.DiscoverNeighbors(r.Context())
 	for _, n := range neighbors {
+		if hasIface && !strings.EqualFold(n.Iface, chosen.Name) {
+			continue
+		}
 		h := &model.Host{
 			IP: n.IP, MAC: n.MAC, Vendor: n.Vendor, Interface: n.Iface,
 			IsLocal: local[n.IP], Kind: classifyHost(n.IP, ifaces), Source: "arp",
@@ -213,6 +311,9 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, i := range ifaces {
+		if hasIface && !strings.EqualFold(i.Name, chosen.Name) {
+			continue
+		}
 		h := &model.Host{
 			IP: i.IP, MAC: i.MAC, Interface: i.Name, IsLocal: true,
 			Kind: "self", Source: "interface", Hostname: hostname(),
@@ -221,7 +322,9 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 	}
 	s.app.Bus.PublishType("hosts", map[string]any{"count": added})
 	s.audit(r, "host.discover", fmt.Sprintf("%d peers", added), "", true)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "discovered": added})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "discovered": added, "iface": ifaceName, "hosts": discovered,
+	})
 }
 
 func hostname() string {

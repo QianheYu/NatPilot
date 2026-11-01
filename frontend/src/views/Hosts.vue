@@ -158,6 +158,55 @@ async function removeHost(h) {
   }
 }
 
+
+// ---- 扫描主机（指定网段 / 网卡）----
+const hostScanOpen = ref(false)
+const hostScanBusy = ref(false)
+const hostScanResult = ref(null)
+const hostScanForm = reactive({ iface: '', cidr: '', ports: '80,443,22,445,3389', timeout_ms: 400 })
+// 回环网卡不提供：扫自己没有意义，还会把 127.0.0.0/8 当成局域网。
+const scanIfaces = computed(() => (interfaces.value || []).filter((i) => !i.loopback && i.up))
+function ifaceSubnet(name) {
+  const i = (interfaces.value || []).find((x) => x.name === name)
+  return i ? i.ip_net || '' : ''
+}
+function openHostScan() {
+  hostScanResult.value = null
+  if (!hostScanForm.iface && scanIfaces.value.length) {
+    hostScanForm.iface = scanIfaces.value[0].name
+    hostScanForm.cidr = ifaceSubnet(hostScanForm.iface)
+  }
+  hostScanOpen.value = true
+}
+function pickScanIface(name) {
+  hostScanForm.iface = name
+  // 换网卡时把网段跟着换成该网卡的子网，避免"扫 A 网卡却用 B 网段"。
+  const sub = ifaceSubnet(name)
+  if (sub) hostScanForm.cidr = sub
+}
+async function runHostScan() {
+  if (!hostScanForm.cidr.trim()) {
+    toastErr('请填写要扫描的网段，例如 192.168.1.0/24', '缺少网段')
+    return
+  }
+  hostScanBusy.value = true
+  try {
+    const res = await api.hostScan({
+      cidr: hostScanForm.cidr.trim(),
+      iface: hostScanForm.iface,
+      ports: hostScanForm.ports,
+      timeout_ms: Number(hostScanForm.timeout_ms) || 400,
+    })
+    hostScanResult.value = res
+    toastOk(`${hostScanForm.cidr} 扫描完成：${res.alive} 台在线，新增/更新 ${res.discovered} 条记录`)
+    await load()
+  } catch (err) {
+    toastErr(err.message, '扫描主机失败')
+  } finally {
+    hostScanBusy.value = false
+  }
+}
+
 // ---- 扫描所选主机 ----
 
 function openScan() {
@@ -437,7 +486,10 @@ onBeforeUnmount(clearPoll)
         <span v-if="scanning" class="spin">◌</span>扫描所选主机
       </button>
       <button class="btn" @click="load"><span v-if="loading" class="spin">◌</span>刷新</button>
-      <button class="btn primary" :disabled="busy || !canWrite()" @click="discoverHosts">发现局域网主机</button>
+      <button class="btn primary" :disabled="hostScanBusy || !canWrite()" @click="openHostScan">
+        <span v-if="hostScanBusy" class="spin">◌</span>扫描主机…
+      </button>
+      <button class="btn" :disabled="busy || !canWrite()" @click="discoverHosts">发现局域网主机</button>
     </div>
 
     <div class="grid cols-4" style="margin-bottom: 16px">
@@ -517,6 +569,66 @@ onBeforeUnmount(clearPoll)
     </div>
 
     <!-- 扫描所选主机 -->
+    <Modal v-if="hostScanOpen" title="扫描主机（指定网段 / 网卡）" wide @close="hostScanOpen = false">
+      <div class="grid cols-2">
+        <label class="field">
+          <span>网卡</span>
+          <select class="select" :value="hostScanForm.iface" @change="pickScanIface($event.target.value)">
+            <option value="">默认路由（不绑定网卡）</option>
+            <option v-for="i in scanIfaces" :key="i.name + i.ip" :value="i.name">
+              {{ i.name }} · {{ i.ip }}<template v-if="i.gateway"> · 网关 {{ i.gateway }}</template>
+            </option>
+          </select>
+          <div class="hint">选中网卡后，探测报文会绑定该网卡的地址发出，多网卡机器不会走错链路。</div>
+        </label>
+        <label class="field">
+          <span>网段（CIDR）</span>
+          <input v-model="hostScanForm.cidr" class="input mono" placeholder="192.168.1.0/24" />
+          <div class="hint">
+            默认带出所选网卡的子网；也可手动填其它网段（最多解析 1024 个地址）。
+          </div>
+        </label>
+        <label class="field">
+          <span>探测端口（任一响应即视为在线）</span>
+          <input v-model="hostScanForm.ports" class="input mono" placeholder="80,443,22,445,3389" />
+        </label>
+        <label class="field">
+          <span>单次超时（毫秒）</span>
+          <input v-model.number="hostScanForm.timeout_ms" class="input" type="number" min="50" max="5000" />
+          <div class="hint">超时越小扫得越快，但可能漏掉响应慢的主机。</div>
+        </label>
+      </div>
+
+      <div v-if="hostScanResult" class="table-wrap" style="max-height: 320px; overflow-y: auto; margin-top: 8px">
+        <table class="data">
+          <thead>
+            <tr><th>IP</th><th>MAC</th><th>主机名</th><th>网卡</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="h in hostScanResult.hosts" :key="h.ip">
+              <td class="mono small">{{ h.ip }}</td>
+              <td class="mono small">{{ h.mac || '—' }}</td>
+              <td class="small">{{ h.hostname || '—' }}</td>
+              <td class="small mute">{{ h.iface || hostScanResult.iface || '—' }}</td>
+            </tr>
+            <tr v-if="!hostScanResult.hosts || !hostScanResult.hosts.length">
+              <td colspan="4" class="dim small">该网段没有主机响应所选端口（可尝试换端口或加大超时）。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="hostScanResult" class="small dim" style="margin-top: 8px">
+        在线 {{ hostScanResult.alive }} 台 · 写入/更新 {{ hostScanResult.discovered }} 条
+      </div>
+
+      <template #footer>
+        <button class="btn" @click="hostScanOpen = false">关闭</button>
+        <button class="btn primary" :disabled="hostScanBusy" @click="runHostScan">
+          <span v-if="hostScanBusy" class="spin">◌</span>开始扫描
+        </button>
+      </template>
+    </Modal>
+
     <Modal v-if="scanOpen" title="扫描所选主机" wide @close="closeScan">
       <div class="small dim" style="margin-bottom: 12px">
         目标（{{ scanTargets.length }} 台）：
