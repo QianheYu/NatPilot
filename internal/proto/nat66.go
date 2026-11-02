@@ -125,47 +125,49 @@ func DetectNAT66(ctx context.Context, opts NAT66Options) NAT66State {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	state := NAT66State{Gateway: opts.Gateway}
 
 	var locals []string
+	localErr := ""
 	if opts.LocalIPv6 != "" {
 		if addr, ok := canonicalNAT66Address(opts.LocalIPv6); ok {
 			locals = []string{addr}
 		} else {
-			state.Err = fmt.Sprintf("本机 IPv6 地址 %q 不是可用的全局/ULA 地址", opts.LocalIPv6)
+			localErr = fmt.Sprintf("本机 IPv6 地址 %q 不是可用的全局/ULA 地址", opts.LocalIPv6)
 		}
+	} else if found, err := LocalIPv6Addresses(); err != nil {
+		localErr = err.Error()
 	} else {
-		found, err := LocalIPv6Addresses()
-		if err != nil {
-			state.Err = err.Error()
-		} else {
-			locals = found
-		}
-	}
-	if len(locals) == 0 && state.Err == "" {
-		state.Err = "本机没有全局/ULA IPv6 地址（只有 link-local 或没有 IPv6 连接），无法判断是否使用 NAT66"
+		locals = found
 	}
 
 	external := strings.TrimSpace(opts.ExternalIPv6)
+	probeErr := ""
 	if external == "" && !opts.SkipHTTP {
-		if addr, err := ProbeExternalIPv6(ctx, opts.Endpoints, opts.Timeout); err == nil {
-			external = addr
-		} else if state.Err == "" {
-			state.Err = err.Error()
+		addr, err := ProbeExternalIPv6(ctx, opts.Endpoints, opts.Timeout)
+		if err != nil {
+			probeErr = err.Error()
 		} else {
-			// Keep the local-address diagnostic, but do not hide the probe error.
-			state.Err = state.Err + "；" + err.Error()
-		}
-	}
-	if external != "" {
-		if addr, ok := canonicalNAT66Address(external); ok {
-			state.ExternalIPv6 = addr
-		} else if state.Err == "" {
-			state.Err = fmt.Sprintf("外部 IPv6 地址 %q 不是可用的全局/ULA 地址", external)
+			external = addr
 		}
 	}
 
-	return DecideNAT66Addresses(state.ExternalIPv6, locals, opts.Gateway)
+	state := DecideNAT66Addresses(external, locals, opts.Gateway)
+	if !state.Available {
+		// Preserve the concrete reason (probe failure, interface enumeration
+		// failure) instead of reducing it to the generic "unknown" message.
+		details := []string{}
+		if localErr != "" {
+			details = append(details, localErr)
+		}
+		if probeErr != "" {
+			details = append(details, probeErr)
+		}
+		if len(details) == 0 {
+			details = append(details, state.Err)
+		}
+		state.Err = strings.Join(details, "；")
+	}
+	return state
 }
 
 // DecideNAT66 is the pure single-address decision used by DetectNAT66 and by
@@ -189,17 +191,6 @@ func DecideNAT66(externalIPv6, localIPv6, gateway string) NAT66State {
 func DecideNAT66Addresses(externalIPv6 string, localIPv6 []string, gateway string) NAT66State {
 	state := NAT66State{Gateway: gateway}
 
-	external, extOK := canonicalNAT66Address(externalIPv6)
-	if !extOK {
-		if strings.TrimSpace(externalIPv6) == "" {
-			state.Err = "未获得外部 IPv6 地址（IPv6 探测不可用），无法判断是否使用 NAT66"
-		} else {
-			state.Err = fmt.Sprintf("外部地址 %q 不是可用的 IPv6 地址", externalIPv6)
-		}
-		return state
-	}
-	state.ExternalIPv6 = external
-
 	seen := map[string]bool{}
 	var normalized []string
 	for _, raw := range localIPv6 {
@@ -210,13 +201,38 @@ func DecideNAT66Addresses(externalIPv6 string, localIPv6 []string, gateway strin
 		seen[addr] = true
 		normalized = append(normalized, addr)
 	}
+	localErr := ""
 	if len(normalized) == 0 {
-		state.Err = "未获得本机的全局/ULA IPv6 地址，无法判断是否使用 NAT66"
+		localErr = "未获得本机的全局/ULA IPv6 地址，无法判断是否使用 NAT66"
+	} else {
+		state.LocalIPv6 = normalized[0]
+	}
+
+	external, extOK := canonicalNAT66Address(externalIPv6)
+	extErr := ""
+	if !extOK {
+		if strings.TrimSpace(externalIPv6) == "" {
+			extErr = "未获得外部 IPv6 地址（IPv6 探测不可用），无法判断是否使用 NAT66"
+		} else {
+			extErr = fmt.Sprintf("外部地址 %q 不是可用的 IPv6 地址", externalIPv6)
+		}
+	} else {
+		state.ExternalIPv6 = external
+	}
+
+	switch {
+	case extErr != "" && localErr != "":
+		state.Err = extErr + "；" + localErr
+		return state
+	case extErr != "":
+		state.Err = extErr
+		return state
+	case localErr != "":
+		state.Err = localErr
 		return state
 	}
-	state.LocalIPv6 = normalized[0]
-	state.Available = true
 
+	state.Available = true
 	for _, addr := range normalized {
 		if addr == external {
 			state.LocalIPv6 = addr

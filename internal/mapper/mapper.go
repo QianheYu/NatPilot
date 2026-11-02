@@ -42,6 +42,12 @@ type Mapper struct {
 	// extOverride carries the external port chosen by the "rename" conflict policy.
 	extOverride map[int64]int
 
+	// NAT66 probe cache (see internal/mapper/nat66.go). nat66Probe is an
+	// injectable replacement for the built-in HTTP probe; nil means built-in.
+	nat66At     time.Time
+	nat66Cached proto.NAT66State
+	nat66Probe  func(context.Context) proto.NAT66State
+
 	lastDiscover time.Time
 	lastError    string
 	discovering  bool
@@ -674,9 +680,10 @@ func (m *Mapper) detectConflicts(rules []model.Rule) {
 
 	used := map[string]int64{}
 	for _, r := range ordered {
-		// IPv6 pinholes forward the same address/port; there is no external port
-		// to collide over, so they never take part in conflict detection.
-		if decideRoute(r.Host, true) == routePinhole {
+		// IPv6 rules use an IPv6-specific mechanism: a pinhole has no external
+		// port to collide over and a NAT66 PCP mapping is scoped to the internal
+		// IPv6 host, so two rules for different hosts never clash.
+		if isIPv6RuleTarget(r.Host) {
 			continue
 		}
 		ext := r.ExtPort
@@ -754,10 +761,13 @@ func (m *Mapper) ensureRule(ctx context.Context, r *model.Rule) ruleResult {
 	}
 	m.mu.RUnlock()
 
-	// IPv6 rules need an IGDv2 firewall pinhole rather than an IPv4 NAT mapping.
-	// The decision happens before any v4-specific work so a v4-only network keeps
-	// exactly the previous behaviour.
-	switch route := decideRoute(r.Host, m.hasPinholeProvider()); route {
+	// IPv6 rules need an IPv6-specific mechanism (PCP MAP behind NAT66, else an
+	// IGDv2 firewall pinhole) rather than an IPv4 NAT mapping. The decision
+	// happens before any v4-specific work so a v4-only network keeps exactly the
+	// previous behaviour.
+	switch route, nat := m.routeFor(ctx, r); route {
+	case routePCPv6:
+		return m.ensurePCPv6(ctx, r, nat)
 	case routePinhole:
 		return m.ensurePinhole(ctx, r)
 	case routeUnsupportedIPv6:
@@ -765,7 +775,7 @@ func (m *Mapper) ensureRule(ctx context.Context, r *model.Rule) ruleResult {
 		if target == "" {
 			target = strings.TrimSpace(r.Host)
 		}
-		return m.failPinholeRule(r, target, m.ipv6UnsupportedError(r, target))
+		return m.failIPv6Rule(r, target, m.ipv6UnsupportedError(r, target, nat))
 	}
 
 	prev, hadPrev := m.record(r.ID)

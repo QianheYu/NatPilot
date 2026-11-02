@@ -21,9 +21,13 @@ const (
 	// routeMapping is a NAT mapping (IPv4). This is the historical behaviour and
 	// must stay the default for every rule that is not an IPv6 literal.
 	routeMapping ruleRoute = iota
-	// routePinhole is an IGDv2 WANIPv6FirewallControl pinhole (IPv6).
+	// routePinhole is an IGDv2 WANIPv6FirewallControl pinhole (IPv6, no NAT66).
 	routePinhole
-	// routeUnsupportedIPv6 is an IPv6 target with no pinhole-capable gateway.
+	// routePCPv6 is a PCP MAP for an IPv6 internal address. It is the only
+	// mechanism that translates a port on a NAT66 network, where a pinhole on
+	// the internal address can never be reached.
+	routePCPv6
+	// routeUnsupportedIPv6 is an IPv6 target with no usable gateway mechanism.
 	routeUnsupportedIPv6
 )
 
@@ -31,6 +35,8 @@ func (r ruleRoute) String() string {
 	switch r {
 	case routePinhole:
 		return "ipv6-pinhole"
+	case routePCPv6:
+		return "ipv6-pcp"
 	case routeUnsupportedIPv6:
 		return "ipv6-unsupported"
 	default:
@@ -38,24 +44,55 @@ func (r ruleRoute) String() string {
 	}
 }
 
+// routeInput is the pure input of the routing decision: the rule target plus
+// the capabilities of the discovered gateways and the NAT66 verdict.
+type routeInput struct {
+	Host string
+	// PinholeCapable: a gateway advertises WANIPv6FirewallControl:1 and its
+	// provider implements AddPinhole.
+	PinholeCapable bool
+	// PCPCapable: a gateway speaks PCP (and therefore can carry a MAP).
+	PCPCapable bool
+	// PCPIPv6: a PCP gateway is reachable over IPv6 / advertises CapPCPIPv6,
+	// which makes it usable for IPv6 even when NAT66 was not confirmed.
+	PCPIPv6 bool
+	// NAT66: the probe detected IPv6 address translation.
+	NAT66 bool
+}
+
 // decideRoute is the pure routing decision for one rule (no network, no config).
 //
 // A rule whose host is an IPv6 literal cannot be expressed as an IPv4 NAT
-// mapping, so it needs a firewall pinhole. Loopback/wildcard/"this host" specs
-// are the exception: they mean "this machine", which effectiveHost resolves to
-// this machine's LAN IPv4 address, so the historical mapping behaviour is kept
-// (no router can forward a pinhole to ::1).
-func decideRoute(host string, pinholeCapable bool) ruleRoute {
-	if isLocalHostSpec(host) {
+// mapping. The order is:
+//
+//  1. a PCP MAP when PCP is available and the network NATs IPv6 (or the gateway
+//     advertises a v6-capable PCP): this is a real port mapping, the only thing
+//     that works behind NAT66;
+//  2. otherwise an IGDv2 firewall pinhole (no port translation, native IPv6);
+//  3. otherwise routeUnsupportedIPv6, which the mapper turns into an actionable
+//     error naming the missing capability.
+//
+// Loopback/wildcard/"this host" specs are the exception: they mean "this
+// machine", which effectiveHost resolves to this machine's LAN IPv4 address, so
+// the historical mapping behaviour is kept (no router can forward a pinhole to
+// ::1).
+func decideRoute(in routeInput) ruleRoute {
+	if isLocalHostSpec(in.Host) || !isIPv6Literal(in.Host) {
 		return routeMapping
 	}
-	if !isIPv6Literal(host) {
-		return routeMapping
+	if in.PCPCapable && (in.NAT66 || in.PCPIPv6) {
+		return routePCPv6
 	}
-	if pinholeCapable {
+	if in.PinholeCapable {
 		return routePinhole
 	}
 	return routeUnsupportedIPv6
+}
+
+// isIPv6RuleTarget reports whether a rule targets a concrete IPv6 address (not
+// "this host"), i.e. whether it needs an IPv6-specific mechanism.
+func isIPv6RuleTarget(host string) bool {
+	return !isLocalHostSpec(host) && isIPv6Literal(host)
 }
 
 // isIPv6Literal reports whether host is an IPv6 literal. IPv4-mapped addresses
@@ -102,6 +139,33 @@ func (m *Mapper) hasPinholeProvider() bool {
 		}
 	}
 	return false
+}
+
+// routeFor resolves the mechanism for one rule and, when it can change the
+// decision, the (cached) NAT66 verdict.
+//
+// The NAT66 probe is skipped for pinhole-only networks: the route is a pinhole
+// either way, so there is no reason to contact the echo services. It is also
+// skipped for IPv4 rules, which keeps a v4-only deployment's behaviour and
+// traffic exactly as before.
+func (m *Mapper) routeFor(ctx context.Context, r *model.Rule) (ruleRoute, proto.NAT66State) {
+	if !isIPv6RuleTarget(r.Host) {
+		return routeMapping, proto.NAT66State{}
+	}
+	pcp := m.hasPCPProvider()
+	pinhole := m.hasPinholeProvider()
+	in := routeInput{
+		Host:           r.Host,
+		PinholeCapable: pinhole,
+		PCPCapable:     pcp,
+		PCPIPv6:        m.hasPCPv6Provider(),
+	}
+	var nat proto.NAT66State
+	if pcp || !pinhole {
+		nat = m.nat66State(ctx)
+		in.NAT66 = nat.Available && nat.Nat66
+	}
+	return decideRoute(in), nat
 }
 
 // pinholeCandidate pairs the gateway description with its pinhole backend.
@@ -172,12 +236,33 @@ func (m *Mapper) gatewayLabel() string {
 }
 
 // ipv6UnsupportedError explains why an IPv6 rule cannot be provisioned and what
-// the operator can do instead. It always names the gateway that was tried.
-func (m *Mapper) ipv6UnsupportedError(r *model.Rule, target string) error {
-	msg := fmt.Sprintf("IPv6 规则 #%d（%s/%d）需要网关提供 IGDv2 WANIPv6FirewallControl 服务才能开启入站 pinhole；"+
-		"当前网关 %s 未提供该服务。请换用支持 IPv6FirewallControl 的网关，"+
-		"或在路由器防火墙中手动添加 IPv6 入站 pinhole（若路由器不支持 pinhole，只能在主机防火墙上放行）",
-		r.ID, target, r.Port, m.gatewayLabel())
+// the operator can do instead. It distinguishes the two failures an IPv6 rule
+// can hit, because the remedy is different:
+//
+//   - the network NATs IPv6 (NAT66) but the gateway has no PCP IPv6 mapping:
+//     only PCP can create a usable port mapping; a pinhole cannot cross the
+//     translation.
+//   - the network does not NAT IPv6 but the gateway has no
+//     WANIPv6FirewallControl service: a pinhole is what is needed.
+//
+// The detected external/local addresses are appended when the probe produced
+// them, so the message is actionable without opening the logs.
+func (m *Mapper) ipv6UnsupportedError(r *model.Rule, target string, nat proto.NAT66State) error {
+	var msg string
+	if nat.Available && nat.Nat66 {
+		msg = fmt.Sprintf("IPv6 规则 #%d（%s/%d）所在网络使用 NAT66，需要网关支持 PCP IPv6 映射%s；"+
+			"当前网关 %s 未提供可用的 PCP 服务。NAT66 会改写 IPv6 源地址，IPv6FirewallControl pinhole 只能放行内网地址、无法被外网访问。"+
+			"请换用支持 PCP 的网关，或在路由器管理界面手动添加 IPv6 端口映射（外部端口 → %s:%d）",
+			r.ID, target, r.Port, nat66Detail(nat), m.gatewayLabel(), target, r.Port)
+	} else {
+		msg = fmt.Sprintf("IPv6 规则 #%d（%s/%d）需要网关支持 IPv6FirewallControl（pinhole）才能开启入站 pinhole；"+
+			"当前网关 %s 未提供该服务。请换用支持 IPv6FirewallControl 的网关，"+
+			"或在路由器防火墙中手动添加 IPv6 入站 pinhole（若路由器不支持 pinhole，只能在主机防火墙上放行）",
+			r.ID, target, r.Port, m.gatewayLabel())
+		if !nat.Available && nat.Err != "" {
+			msg += fmt.Sprintf("；NAT66 探测未得出结论：%s", nat.Err)
+		}
+	}
 	if pinned := strings.TrimSpace(r.Provider); pinned != "" {
 		msg += fmt.Sprintf("；该规则固定到网关 %q，请改为自动选择或选择支持该服务的网关", pinned)
 	}
@@ -276,7 +361,7 @@ func (m *Mapper) ensurePinhole(ctx context.Context, r *model.Rule) ruleResult {
 
 	cands := m.pinholeCandidates(strings.TrimSpace(r.Provider))
 	if len(cands) == 0 {
-		return m.failPinholeRule(r, target, m.ipv6UnsupportedError(r, target))
+		return m.failPinholeRule(r, target, m.ipv6UnsupportedError(r, target, m.nat66State(ctx)))
 	}
 
 	req := proto.IPv6Pinhole{
@@ -399,13 +484,23 @@ func (m *Mapper) removePinhole(ctx context.Context, r model.Rule, rec model.Mapp
 
 // failPinholeRule records an IPv6 pinhole failure and reports it.
 func (m *Mapper) failPinholeRule(r *model.Rule, target string, err error) ruleResult {
+	return m.failIPv6Rule(r, target, err)
+}
+
+// failIPv6Rule records a failed IPv6 provisioning attempt.
+//
+// It keeps the mechanism marker of a previously created mapping: deleting the
+// record on a failed renewal would otherwise orphan the live pinhole/PCP
+// mapping until its lease runs out, because nothing would remember how to tear
+// it down.
+func (m *Mapper) failIPv6Rule(r *model.Rule, target string, err error) ruleResult {
 	desc := buildDescription(r)
-	// Keep the id of a previously created pinhole: deleting the record on a
-	// failed renewal would otherwise orphan the live pinhole until its lease runs
-	// out, because nothing would remember which id to delete.
 	if prev, ok := m.record(r.ID); ok {
-		if id, has := pinholeIDFromRecord(prev); has && id > 0 {
+		if id, has := pinholeIDFromDescription(prev.Description); has && id > 0 {
 			desc = pinholeDescription(desc, id)
+		}
+		if ext, has := pcpExtPortFromDescription(prev.Description); has && ext > 0 {
+			desc = pcpDescription(desc, ext)
 		}
 	}
 	m.persistRecord(r, model.MappingRecord{
@@ -418,7 +513,7 @@ func (m *Mapper) failPinholeRule(r *model.Rule, target string, err error) ruleRe
 		Error:        err.Error(),
 	})
 	if m.ev != nil {
-		m.ev.Publish("mapping", fmt.Sprintf("IPv6 pinhole failed for rule #%d (%s/%d): %s",
+		m.ev.Publish("mapping", fmt.Sprintf("IPv6 mapping failed for rule #%d (%s/%d): %s",
 			r.ID, m.ruleProtocol(r), r.Port, err.Error()),
 			model.JSONMap{"rule_id": r.ID, "port": r.Port, "error": err.Error(), "ipv6": true})
 	}

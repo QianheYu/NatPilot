@@ -55,9 +55,29 @@ func TestDecideRoute(t *testing.T) {
 		{"fe80::1%12", true, routePinhole},
 	}
 	for _, c := range cases {
-		if got := decideRoute(c.host, c.capable); got != c.want {
-			t.Errorf("decideRoute(%q, capable=%v) = %s, want %s",
+		in := routeInput{Host: c.host, PinholeCapable: c.capable}
+		if got := decideRoute(in); got != c.want {
+			t.Errorf("decideRoute(%q, pinhole=%v) = %s, want %s",
 				c.host, c.capable, got, c.want)
+		}
+	}
+
+	// NAT66 / PCP routing: a real port mapping is the only thing that works when
+	// the network translates IPv6 addresses.
+	nat66Cases := []struct {
+		name string
+		in   routeInput
+		want ruleRoute
+	}{
+		{"nat66 + pcp", routeInput{Host: "2001:db8::5", PCPCapable: true, NAT66: true}, routePCPv6},
+		{"pcp advertises v6", routeInput{Host: "2001:db8::5", PCPCapable: true, PCPIPv6: true}, routePCPv6},
+		{"pcp but no nat66/v6", routeInput{Host: "2001:db8::5", PCPCapable: true}, routeUnsupportedIPv6},
+		{"nat66 without pcp, pinhole available", routeInput{Host: "2001:db8::5", PinholeCapable: true, NAT66: true}, routePinhole},
+		{"nat66 without any capability", routeInput{Host: "2001:db8::5", NAT66: true}, routeUnsupportedIPv6},
+	}
+	for _, c := range nat66Cases {
+		if got := decideRoute(c.in); got != c.want {
+			t.Errorf("%s: decideRoute(%+v) = %s, want %s", c.name, c.in, got, c.want)
 		}
 	}
 }

@@ -186,10 +186,8 @@ func TestProbeExternalIPv6BodyHandling(t *testing.T) {
 	if _, err := probeExternalIPv6(ctx, []string{srv.URL + "/fail"}, 2*time.Second, "tcp4"); err == nil {
 		t.Errorf("an HTTP error must be reported")
 	}
-	if _, err := probeExternalIPv6(ctx, nil, 2*time.Second, "tcp4"); err == nil {
-		// The default endpoints are real hosts; this call must fail fast in a
-		// sandbox without IPv6 rather than hang. Only the error contract matters.
-		t.Log("default endpoints unexpectedly answered; skipping emptiness assertion")
+	if _, err := probeExternalIPv6(ctx, []string{"", "  "}, 2*time.Second, "tcp4"); err == nil {
+		t.Errorf("an empty endpoint list must be reported, not silently accepted")
 	}
 }
 
