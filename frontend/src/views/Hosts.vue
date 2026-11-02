@@ -347,7 +347,12 @@ const hostScanResult = ref(null)
 // cidr 是可选项：留空表示「扫所选网卡所在网段」，由后端按 iface 计算。
 // iface 存复合值 "<name>|<ip>"：同一块网卡现在有 IPv4 / IPv6 两个条目，
 // 只用名字会永远选中 IPv4 那条。
-const hostScanForm = reactive({ iface: '', cidr: '', ports: '80,443,22,445,3389', timeout_ms: 400 })
+const hostScanForm = reactive({
+  iface: '', cidr: '', ports: '80,443,22,445,3389', timeout_ms: 400,
+  // 多目标：可同时选多块网卡（各自扫自己的网段），与手填网段组合使用。
+  targets: [],
+  autoEnabled: false, autoInterval: 900, autoBusy: false,
+})
 
 // ifaceKey 是网卡下拉里每个条目的唯一值。
 function ifaceKey(i) {
@@ -399,6 +404,7 @@ const scanTarget = computed(() => {
 })
 
 function openHostScan() {
+  loadAutoScan()
   hostScanResult.value = null
   // 首次打开、或接口列表变化导致旧选择失效时，默认选第一块可用网卡并带出网段。
   // 之后不再覆盖用户已填的网段（用户可能故意清空它）。
@@ -450,6 +456,49 @@ function scanDoneMessage(res, sentMode, sentCidr) {
   return msg
 }
 
+async function loadAutoScan() {
+  try {
+    const res = await api.getAutoScan()
+    const auto = res.auto || res
+    hostScanForm.autoEnabled = !!auto.enabled
+    if (auto.interval_seconds) hostScanForm.autoInterval = auto.interval_seconds
+  } catch {
+    /* 自动扫描状态读不到不影响手动扫描 */
+  }
+}
+
+async function saveAutoScan() {
+  const cidrs = []
+  for (const key of hostScanForm.targets.filter(Boolean)) {
+    const it = scanIfaces.value.find((i) => ifaceKey(i) === key)
+    const def = ifaceDefaultCidr(it)
+    if (def) cidrs.push(def)
+  }
+  const manual = hostScanForm.cidr.trim()
+  if (manual) cidrs.push(manual)
+  if (hostScanForm.autoEnabled && !cidrs.length) {
+    toastErr('自动扫描需要至少一个目标：勾选网卡或填写网段', '缺少目标')
+    return
+  }
+  hostScanForm.autoBusy = true
+  try {
+    const res = await api.patchAutoScan({
+      enabled: hostScanForm.autoEnabled,
+      interval_seconds: Number(hostScanForm.autoInterval) || 900,
+      cidrs,
+      ports: hostScanForm.ports,
+    })
+    const auto = res.auto || res
+    hostScanForm.autoEnabled = !!auto.enabled
+    hostScanForm.autoInterval = auto.interval_seconds || hostScanForm.autoInterval
+    toastOk(auto.enabled ? `已开启自动扫描，每 ${auto.interval_seconds} 秒一次` : '已关闭自动扫描')
+  } catch (err) {
+    toastErr(err.message, '保存自动扫描设置失败')
+  } finally {
+    hostScanForm.autoBusy = false
+  }
+}
+
 async function runHostScan() {
   const cidr = hostScanForm.cidr.trim()
   const iface = hostScanForm.iface
@@ -462,13 +511,20 @@ async function runHostScan() {
   const mode = cidr ? 'cidr' : iface ? 'subnet' : 'cidr'
   hostScanBusy.value = true
   try {
+    const picked = hostScanForm.targets.filter(Boolean)
     const payload = {
-      mode,
-      iface,
       ports: hostScanForm.ports,
       timeout_ms: Number(hostScanForm.timeout_ms) || 400,
     }
-    if (cidr) payload.cidr = cidr
+    if (picked.length || (cidr && picked.length === 0 && false)) {
+      // 多目标：每块网卡一个 iface 目标，手填网段作为一个 cidr 目标。
+      payload.targets = picked.map((key) => ({ kind: 'iface', iface: key }))
+      if (cidr) payload.targets.push({ kind: 'cidr', cidr })
+    } else {
+      payload.mode = mode
+      payload.iface = iface
+      if (cidr) payload.cidr = cidr
+    }
     const res = await api.hostScan(payload)
     hostScanResult.value = res
     toastOk(scanDoneMessage(res, mode, cidr))
@@ -907,6 +963,17 @@ onBeforeUnmount(clearPoll)
           <div class="hint">IPv6 链路本地地址（fe80::/10）会使用该网卡的 zone 扫描。</div>
         </label>
         <label class="field">
+          <span>多目标（可组合多选）</span>
+          <select v-model="hostScanForm.targets" class="select" multiple size="5">
+            <option v-for="i in scanIfaces" :key="ifaceKey(i)" :value="ifaceKey(i)">
+              {{ i.name }} · {{ fmtHost(i.ip) }}<template v-if="ifaceFamily(i)"> · {{ ifaceFamily(i) }}</template>
+            </option>
+          </select>
+          <div class="hint">
+            选中多块网卡时，每块网卡各扫自己的网段；与上方网段组合使用（网段作为额外目标）。留空则按单选网卡扫描。
+          </div>
+        </label>
+        <label class="field">
           <span>网段（CIDR，可选）</span>
           <div class="row" style="gap: 8px; align-items: center">
             <input
@@ -931,6 +998,29 @@ onBeforeUnmount(clearPoll)
           <div class="hint">
             <span class="badge accent" v-if="!hostScanForm.cidr.trim() && scanIface">自动</span>
             {{ scanTarget.label }}
+          </div>
+        </label>
+        <label class="field">
+          <span>自动扫描</span>
+          <div class="row" style="gap: 10px; align-items: center">
+            <Switch v-model="hostScanForm.autoEnabled" />
+            <span class="small dim">自动运行</span>
+            <input
+              v-model.number="hostScanForm.autoInterval"
+              class="input"
+              type="number"
+              min="60"
+              max="86400"
+              step="60"
+              style="width: 120px"
+            />
+            <span class="small dim">秒/次</span>
+            <button class="btn sm" type="button" :disabled="hostScanForm.autoBusy" @click="saveAutoScan">
+              保存自动扫描
+            </button>
+          </div>
+          <div class="hint">
+            自动扫描使用「多目标 + 网段」里选中的目标；间隔 60–86400 秒，改完立即生效，无需重启。
           </div>
         </label>
         <label class="field">

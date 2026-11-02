@@ -148,6 +148,8 @@ export const api = {
   // hosts & network
   hosts: (query) => get('/api/hosts', query),
   hostScan: (body) => post('/api/hosts/scan', body || {}),
+  getAutoScan: () => get('/api/scans/host/auto'),
+  patchAutoScan: (body) => patch('/api/scans/host/auto', body),
   deleteHost: (id) => del(`/api/hosts/${id}`),
   // 主机名/备注/标签都挂在主机记录（即 MAC）上，换 IP 不会丢。
   patchHost: (id, body) => patch(`/api/hosts/${id}`, body),
