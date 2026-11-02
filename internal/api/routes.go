@@ -70,6 +70,8 @@ func (s *Server) routes() {
 	// ---- hosts ----
 	m.HandleFunc("GET /api/hosts", s.authMiddleware(s.handleListHosts))
 	m.HandleFunc("POST /api/hosts/scan", s.writeMiddleware(s.handleHostScan))
+	m.HandleFunc("GET /api/scans/host/auto", s.authMiddleware(s.handleGetAutoScan))
+	m.HandleFunc("PATCH /api/scans/host/auto", s.writeMiddleware(s.handlePatchAutoScan))
 	// Per-host monitoring: policies bound to the host's MAC so a DHCP address
 	// change does not break them. A host may have several such policies.
 	m.HandleFunc("GET /api/hosts/{id}/policies", s.authMiddleware(s.handleListHostPolicies))

@@ -283,6 +283,7 @@ func cmdServe(ctx context.Context, flags map[string]string, args []string) int {
 	}
 
 	a.Run(ctx)
+	go handler.StartAutoScanLoop(ctx)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

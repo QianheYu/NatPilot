@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ekko-studio/natpilot/internal/bus"
@@ -290,75 +291,75 @@ func (s *Server) hostnameIfUnknown(ctx context.Context, ip, mac string) string {
 // Passive discovery can only see peers the OS already talked to; the active
 // sweep is what makes "scan this subnet on this NIC" work, and it also forces the
 // ARP entries that give each host its MAC (host-bound policies key on the MAC).
-func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		CIDR      string `json:"cidr"`
-		Iface     string `json:"iface"`
-		Mode      string `json:"mode"`
-		Ports     string `json:"ports"`
-		TimeoutMS int    `json:"timeout_ms"`
-		MaxHosts  int    `json:"max_hosts"`
-	}
-	// An empty body keeps the old "discover what the OS already knows" behaviour.
-	_ = decodeJSONLoose(r, &req)
+// hostScanParams is one sweep: an explicit CIDR, an interface (its own subnet),
+// or neither (passive neighbour discovery).
+type hostScanParams struct {
+	Mode      string
+	CIDR      string
+	Iface     string
+	Ports     string
+	TimeoutMS int
+	MaxHosts  int
+}
 
+// hostScanResult is the per-target outcome. `error` is set when that one target
+// failed, which must not abort the other targets of a multi-target request.
+type hostScanResult struct {
+	Mode       string           `json:"mode"`
+	CIDR       string           `json:"cidr"`
+	Iface      string           `json:"iface"`
+	Alive      int              `json:"alive"`
+	Skipped    int              `json:"skipped"`
+	Discovered int              `json:"discovered"`
+	Hosts      []map[string]any `json:"hosts"`
+	Error      string           `json:"error,omitempty"`
+}
+
+// runHostScan executes ONE host-scan target. It is shared by the HTTP handler and
+// the automatic scan loop so both behave identically.
+func (s *Server) runHostScan(ctx context.Context, p hostScanParams) (hostScanResult, error) {
 	ifaces, _ := netutil.Interfaces()
 	local, _ := netutil.LocalAddresses()
-
-	chosen, hasIface := scanner.PickInterface(ifaces, req.Iface)
-	if strings.TrimSpace(req.Iface) != "" && !hasIface {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("未找到网卡 %q", req.Iface))
-		return
+	chosen, hasIface := scanner.PickInterface(ifaces, p.Iface)
+	if strings.TrimSpace(p.Iface) != "" && !hasIface {
+		return hostScanResult{}, fmt.Errorf("未找到网卡 %q", p.Iface)
 	}
 	ifaceName := ""
 	if hasIface {
 		ifaceName = chosen.Name
 	}
-
-	kind, cidrOut, err := resolveScanMode(req.CIDR, req.Iface, req.Mode, chosen, hasIface)
+	kind, cidrOut, err := resolveScanMode(p.CIDR, p.Iface, p.Mode, chosen, hasIface)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return hostScanResult{}, err
 	}
-
-	added := 0
-	discovered := []map[string]any{}
+	res := hostScanResult{Mode: kind, CIDR: cidrOut, Iface: ifaceName, Hosts: []map[string]any{}}
 
 	if kind != scanModePassive {
-		ports, perr := scanner.ParseProbePorts(req.Ports)
+		ports, perr := scanner.ParseProbePorts(p.Ports)
 		if perr != nil {
-			writeError(w, http.StatusBadRequest, perr.Error())
-			return
+			return hostScanResult{}, perr
 		}
-		probe := scanner.HostProbe{
-			CIDR:     cidrOut,
-			Ports:    ports,
-			MaxHosts: req.MaxHosts,
-		}
+		probe := scanner.HostProbe{CIDR: cidrOut, Ports: ports, MaxHosts: p.MaxHosts}
 		if hasIface {
 			// 绑定源地址就等于选定网卡：多网卡机器上不会走到默认路由那块网卡。
-			// 目标子网属于另一个地址族时不绑定，否则每次连接都会在 bind 阶段失败。
 			if bindSourceFamily(chosen, cidrOut) {
 				probe.SourceIP = chosen.IP
 			}
 			if chosen.IsV6() {
-				// fe80::/64 子网的目标地址和源地址都需要 scope id 才能拨通。
-				// 全局 IPv6 的 Zone 为空，赋值是无害的空操作。
 				probe.SourceZone = chosen.Zone
 				probe.TargetZone = chosen.Zone
 			}
 		}
-		if req.TimeoutMS > 0 {
-			probe.Timeout = time.Duration(req.TimeoutMS) * time.Millisecond
+		if p.TimeoutMS > 0 {
+			probe.Timeout = time.Duration(p.TimeoutMS) * time.Millisecond
 		}
-		alive, skipped, err := scanner.ProbeCIDR(r.Context(), probe)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
+		alive, skipped, serr := scanner.ProbeCIDR(ctx, probe)
+		if serr != nil {
+			return hostScanResult{}, serr
 		}
-		// 主动探测会把应答方的 ARP 表项刷新出来，用来补 MAC/厂商。
+		res.Alive, res.Skipped = len(alive), skipped
 		macOf := map[string]netutil.Neighbor{}
-		if neighbors, nerr := netutil.DiscoverNeighbors(r.Context()); nerr == nil {
+		if neighbors, nerr := netutil.DiscoverNeighbors(ctx); nerr == nil {
 			for _, n := range neighbors {
 				macOf[n.IP] = n
 			}
@@ -375,28 +376,21 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 					h.Interface = n.Iface
 				}
 			}
-			// 记录本次发现的地址（含 IPv6 的 zone），让同一台设备的多栈地址合并到一行。
 			h.Addresses = []model.HostAddress{hostAddressFor(ip, h.Interface, "scan")}
-			h.Hostname = s.hostnameIfUnknown(r.Context(), ip, h.MAC)
+			h.Hostname = s.hostnameIfUnknown(ctx, ip, h.MAC)
 			if err := s.app.Store.UpsertHost(h); err == nil {
-				added++
+				res.Discovered++
 			}
-			discovered = append(discovered, map[string]any{
+			res.Hosts = append(res.Hosts, map[string]any{
 				"ip": h.IP, "mac": h.MAC, "vendor": h.Vendor,
 				"hostname": h.Hostname, "iface": h.Interface, "is_local": h.IsLocal,
 			})
 		}
-		s.app.Bus.PublishType("hosts", map[string]any{"count": added})
-		s.audit(r, "host.discover", fmt.Sprintf("%s %s on %s: %d alive, %d skipped",
-			kind, cidrOut, orDefault(ifaceName, "any"), len(alive), skipped), "", true)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": true, "mode": kind, "discovered": added, "alive": len(alive),
-			"cidr": cidrOut, "iface": ifaceName, "skipped": skipped, "hosts": discovered,
-		})
-		return
+		s.app.Bus.PublishType("hosts", map[string]any{"count": res.Discovered})
+		return res, nil
 	}
 
-	neighbors, _ := netutil.DiscoverNeighbors(r.Context())
+	neighbors, _ := netutil.DiscoverNeighbors(ctx)
 	for _, n := range neighbors {
 		if hasIface && !strings.EqualFold(n.Iface, chosen.Name) {
 			continue
@@ -408,11 +402,11 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 		h := &model.Host{
 			IP: n.IP, MAC: n.MAC, Vendor: n.Vendor, Interface: n.Iface,
 			IsLocal: local[n.IP], Kind: classifyHost(n.IP, ifaces), Source: src,
-			Hostname: s.hostnameIfUnknown(r.Context(), n.IP, n.MAC),
+			Hostname: s.hostnameIfUnknown(ctx, n.IP, n.MAC),
 		}
 		h.Addresses = []model.HostAddress{hostAddressFor(n.IP, n.Iface, src)}
 		if err := s.app.Store.UpsertHost(h); err == nil {
-			added++
+			res.Discovered++
 		}
 	}
 	for _, i := range ifaces {
@@ -426,12 +420,101 @@ func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
 		h.Addresses = []model.HostAddress{hostAddressFor(i.IP, i.Zone, "interface")}
 		_ = s.app.Store.UpsertHost(h)
 	}
-	s.app.Bus.PublishType("hosts", map[string]any{"count": added})
-	s.audit(r, "host.discover", fmt.Sprintf("%d peers", added), "", true)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "mode": scanModePassive, "discovered": added, "alive": 0,
-		"cidr": "", "iface": ifaceName, "skipped": 0, "hosts": discovered,
-	})
+	s.app.Bus.PublishType("hosts", map[string]any{"count": res.Discovered})
+	return res, nil
+}
+
+// hostScanTargetReq is one entry of the optional `targets` array: scan the
+// subnet of an interface, or an explicit CIDR. Several targets may be combined.
+type hostScanTargetReq struct {
+	Kind  string `json:"kind"`
+	Iface string `json:"iface"`
+	CIDR  string `json:"cidr"`
+}
+
+func (s *Server) handleHostScan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CIDR      string              `json:"cidr"`
+		Iface     string              `json:"iface"`
+		Mode      string              `json:"mode"`
+		Ports     string              `json:"ports"`
+		TimeoutMS int                 `json:"timeout_ms"`
+		MaxHosts  int                 `json:"max_hosts"`
+		Targets   []hostScanTargetReq `json:"targets"`
+	}
+	// An empty body keeps the old "discover what the OS already knows" behaviour.
+	_ = decodeJSONLoose(r, &req)
+
+	params := make([]hostScanParams, 0, len(req.Targets))
+	if len(req.Targets) > 0 {
+		if len(req.Targets) > 16 {
+			writeError(w, http.StatusBadRequest, "一次最多 16 个扫描目标")
+			return
+		}
+		for _, t := range req.Targets {
+			p := hostScanParams{
+				Ports: req.Ports, TimeoutMS: req.TimeoutMS, MaxHosts: req.MaxHosts,
+				CIDR: strings.TrimSpace(t.CIDR), Iface: strings.TrimSpace(t.Iface),
+			}
+			switch strings.ToLower(strings.TrimSpace(t.Kind)) {
+			case "iface", "subnet", "interface":
+				p.Mode = scanModeSubnet
+			case "cidr", "subnet-cidr", "":
+				p.Mode = scanModeCIDR
+			default:
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("未知目标类型 %q（iface 或 cidr）", t.Kind))
+				return
+			}
+			params = append(params, p)
+		}
+	} else {
+		params = append(params, hostScanParams{
+			Mode: req.Mode, CIDR: req.CIDR, Iface: req.Iface,
+			Ports: req.Ports, TimeoutMS: req.TimeoutMS, MaxHosts: req.MaxHosts,
+		})
+	}
+
+	results := make([]hostScanResult, 0, len(params))
+	valid, firstErr := 0, error(nil)
+	for _, p := range params {
+		res, err := s.runHostScan(r.Context(), p)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			results = append(results, hostScanResult{
+				Mode: p.Mode, CIDR: p.CIDR, Iface: p.Iface,
+				Hosts: []map[string]any{}, Error: err.Error(),
+			})
+			continue
+		}
+		valid++
+		results = append(results, res)
+	}
+	if valid == 0 && firstErr != nil {
+		writeError(w, http.StatusBadRequest, firstErr.Error())
+		return
+	}
+
+	alive, discovered, skipped := 0, 0, 0
+	hosts := []map[string]any{}
+	for _, res := range results {
+		alive += res.Alive
+		discovered += res.Discovered
+		skipped += res.Skipped
+		hosts = append(hosts, res.Hosts...)
+	}
+	first := results[0]
+	out := map[string]any{
+		"ok": true, "mode": first.Mode, "discovered": discovered, "alive": alive,
+		"cidr": first.CIDR, "iface": first.Iface, "skipped": skipped, "hosts": hosts,
+	}
+	if len(results) > 1 {
+		out["results"] = results
+	}
+	s.audit(r, "host.discover", fmt.Sprintf("%d target(s): %d alive, %d discovered",
+		len(results), alive, discovered), "", true)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // Scan modes reported in the host-scan response and accepted in the request.
@@ -1363,4 +1446,125 @@ func hostAddressFor(ip, zone, source string) model.HostAddress {
 		addr.Zone = ""
 	}
 	return addr
+}
+
+// ---- 自动主机扫描 ----
+
+// autoScanState is the JSON shape of GET/PATCH /api/scans/host/auto.
+type autoScanState struct {
+	Enabled         bool     `json:"enabled"`
+	IntervalSeconds int      `json:"interval_seconds"`
+	CIDRs           []string `json:"cidrs"`
+	Ports           string   `json:"ports"`
+	NextRun         string   `json:"next_run,omitempty"`
+}
+
+func (s *Server) autoScanNow() autoScanState {
+	cfg := s.app.Config.Scanner
+	next := ""
+	if cfg.AutoScanEnabled && cfg.AutoIntervalSec > 0 {
+		next = time.Now().Add(time.Duration(cfg.AutoIntervalSec) * time.Second).UTC().Format(time.RFC3339)
+	}
+	return autoScanState{
+		Enabled:         cfg.AutoScanEnabled,
+		IntervalSeconds: cfg.AutoIntervalSec,
+		CIDRs:           append([]string{}, cfg.AutoScanCIDR...),
+		Ports:           cfg.DefaultPorts,
+		NextRun:         next,
+	}
+}
+
+func (s *Server) handleGetAutoScan(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auto": s.autoScanNow()})
+}
+
+func (s *Server) handlePatchAutoScan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled         *bool    `json:"enabled"`
+		IntervalSeconds *int     `json:"interval_seconds"`
+		CIDRs           []string `json:"cidrs"`
+		Ports           *string  `json:"ports"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cfg := &s.app.Config.Scanner
+	if req.Enabled != nil {
+		cfg.AutoScanEnabled = *req.Enabled
+	}
+	if req.IntervalSeconds != nil {
+		v := *req.IntervalSeconds
+		if v < 60 {
+			v = 60
+		}
+		if v > 86400 {
+			v = 86400
+		}
+		cfg.AutoIntervalSec = v
+	}
+	if req.CIDRs != nil {
+		if len(req.CIDRs) > 16 {
+			writeError(w, http.StatusBadRequest, "最多 16 个扫描网段")
+			return
+		}
+		cfg.AutoScanCIDR = append([]string{}, req.CIDRs...)
+	}
+	if req.Ports != nil {
+		cfg.DefaultPorts = strings.TrimSpace(*req.Ports)
+	}
+	// 持久化到 settings（config. 前缀），重启后与其他设置一样被重新应用。
+	kv := map[string]string{
+		"scanner.auto_scan_enabled":     strconv.FormatBool(cfg.AutoScanEnabled),
+		"scanner.auto_interval_seconds": strconv.Itoa(cfg.AutoIntervalSec),
+		"scanner.auto_scan_cidr":        strings.Join(cfg.AutoScanCIDR, ","),
+	}
+	for k, v := range kv {
+		_ = s.app.Store.SetSetting("config."+k, v)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auto": s.autoScanNow()})
+}
+
+// StartAutoScanLoop runs the configured automatic host scans. It re-reads the
+// config before every run, so PATCH takes effect without a restart, and it never
+// overlaps two runs.
+func (s *Server) StartAutoScanLoop(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	var running int32
+	last := time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cfg := s.app.Config.Scanner
+			if !cfg.AutoScanEnabled || len(cfg.AutoScanCIDR) == 0 {
+				continue
+			}
+			iv := time.Duration(cfg.AutoIntervalSec) * time.Second
+			if iv < 60*time.Second {
+				iv = 60 * time.Second
+			}
+			if !last.IsZero() && time.Since(last) < iv {
+				continue
+			}
+			if !atomic.CompareAndSwapInt32(&running, 0, 1) {
+				continue
+			}
+			last = time.Now()
+			go func(cidrs []string, ports string) {
+				defer atomic.StoreInt32(&running, 0)
+				for _, cidr := range cidrs {
+					res, err := s.runHostScan(ctx, hostScanParams{Mode: scanModeCIDR, CIDR: cidr, Ports: ports})
+					if err != nil {
+						logging.Warn("scanner", "auto host scan failed", "cidr", cidr, "error", err.Error())
+						continue
+					}
+					s.app.Bus.PublishType("hosts", map[string]any{"count": res.Discovered, "auto": true})
+					logging.Info("scanner", "auto host scan done", "cidr", cidr, "alive", res.Alive, "discovered", res.Discovered)
+				}
+			}(append([]string{}, cfg.AutoScanCIDR...), cfg.DefaultPorts)
+		}
+	}
 }

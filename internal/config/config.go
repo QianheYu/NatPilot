@@ -83,6 +83,7 @@ type Scanner struct {
 	GrabBanners      bool     `json:"grab_banners" yaml:"grab_banners"`
 	AutoMonitorLocal bool     `json:"auto_monitor_local" yaml:"auto_monitor_local"`
 	AutoLocalPolicy  string   `json:"auto_local_policy" yaml:"auto_local_policy"`
+	AutoScanEnabled  bool     `json:"auto_scan_enabled" yaml:"auto_scan_enabled"`
 	AutoScanCIDR     []string `json:"auto_scan_cidr" yaml:"auto_scan_cidr"`
 	AutoIntervalSec  int      `json:"auto_interval_seconds" yaml:"auto_interval_seconds"`
 	AutoApplyPolicy  bool     `json:"auto_apply_policy" yaml:"auto_apply_policy"`
@@ -192,6 +193,7 @@ func Default() *Config {
 		DefaultPorts:     "1-1024,3000,3306,5000,5432,6379,8000-8100,8080,8443,9000,9090,27017,32400",
 		GrabBanners:      true,
 		AutoMonitorLocal: false,
+		AutoScanEnabled:  false,
 		AutoLocalPolicy:  "",
 		AutoIntervalSec:  300,
 		AutoApplyPolicy:  true,
